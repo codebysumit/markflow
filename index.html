@@ -1,0 +1,3783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MarkFlow — Markdown Renderer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <!-- Google Identity Services (for Drive OAuth) — loads async -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://unpkg.com/prettier@2.8.8/standalone.js"></script>
+  <script src="https://unpkg.com/prettier@2.8.8/parser-markdown.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=IBM+Plex+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #1a1208;
+      --paper: #f5f0e8;
+      --cream: #ede7d3;
+      --accent: #c0392b;
+      --accent2: #2c7a4b;
+      --gold: #b8860b;
+      --muted: #7a6f5e;
+      --border: #c8bda8;
+      --editor-bg: #1e1810;
+      --editor-surface: #16110c;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'Lora', Georgia, serif;
+      height: 100vh;
+      max-height: 100vh;
+      overflow: hidden;   /* the whole page never scrolls — only inner panels do */
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--ink);
+      color: var(--paper);
+      padding: 0 1.4rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 54px;
+      border-bottom: 3px solid var(--accent);
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      flex-shrink: 0;
+      gap: 0.8rem;
+    }
+    .logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.35rem;
+      font-weight: 900;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .logo-dot { color: var(--accent); }
+
+    .header-title {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    #titleInput {
+      flex: 1;
+      min-width: 0;
+      background: rgba(255,255,255,0.07);
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 3px;
+      color: var(--paper);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.8rem;
+      padding: 0.36rem 0.7rem;
+      outline: none;
+      transition: border-color 0.15s;
+      /* keep it on the same row as the autosave dot */
+      display: block;
+    }
+    #titleInput::placeholder { color: rgba(245,240,232,0.28); }
+    #titleInput:focus { border-color: rgba(255,255,255,0.38); }
+
+    .header-actions {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      padding: 0.36rem 0.8rem;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1.5px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      white-space: nowrap;
+    }
+    .btn svg { width: 12px; height: 12px; flex-shrink: 0; }
+    .btn-ghost { color: rgba(245,240,232,0.72); border-color: rgba(245,240,232,0.18); background: transparent; }
+    .btn-ghost:hover { background: rgba(255,255,255,0.07); border-color: rgba(245,240,232,0.45); color: var(--paper); }
+    .btn-save { background: var(--accent2); color: #fff; border-color: var(--accent2); }
+    .btn-save:hover { background: #225736; }
+    .btn-copy { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-copy:hover { background: #a13224; }
+    .hdr-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.1); margin: 0 0.1rem; }
+    #fileInput { display: none; }
+
+    /* ── Workspace ── */
+    .workspace {
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+      /* strictly clamp to remaining viewport — never lets children push past this */
+      min-height: 0;
+      position: relative;
+    }
+    .panel-editor, .panel-preview {
+      overflow: hidden;
+      /* prevent flex children from blowing past the workspace height */
+      min-height: 0;
+    }
+
+    /* ── Resizer handle ── */
+    .resizer {
+      width: 6px;
+      background: var(--border);
+      cursor: col-resize;
+      flex-shrink: 0;
+      position: relative;
+      transition: background 0.15s;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .resizer::after {
+      content: '';
+      display: block;
+      width: 2px;
+      height: 32px;
+      background: rgba(26,18,8,0.25);
+      border-radius: 1px;
+    }
+    .resizer:hover, .resizer.dragging {
+      background: var(--accent);
+    }
+    .resizer:hover::after, .resizer.dragging::after {
+      background: rgba(255,255,255,0.4);
+    }
+    .resizer-tooltip {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -150%);
+      background: #060403;
+      color: rgba(245,240,232,0.85);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.55rem;
+      letter-spacing: 0.06em;
+      padding: 3px 7px;
+      border-radius: 2px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      border: 1px solid rgba(255,255,255,0.09);
+    }
+    .resizer:hover .resizer-tooltip { opacity: 1; }
+
+    /* ── Editor Panel ── */
+    .panel-editor {
+      display: flex;
+      flex-direction: column;
+      background: var(--editor-bg);
+      overflow: hidden;
+      flex-shrink: 0;   /* width doesn't shrink (controlled by resizer) */
+      min-height: 0;    /* critical: allows children to scroll instead of expanding */
+    }
+    .panel-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.58rem;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0.42rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .panel-editor .panel-label {
+      color: rgba(245,240,232,0.38);
+      background: var(--editor-surface);
+      border-bottom: 1px solid rgba(255,255,255,0.055);
+    }
+    .panel-preview .panel-label {
+      color: var(--muted);
+      background: var(--cream);
+      border-bottom: 1px solid var(--border);
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
+    .panel-preview .dot { background: var(--accent2); }
+
+    /* ── Advanced Toolbar ── */
+    .toolbar {
+      background: var(--editor-surface);
+      border-bottom: 1px solid rgba(255,255,255,0.065);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1px;
+      padding: 4px 8px;
+      flex-shrink: 0;
+      row-gap: 3px;
+    }
+    .tb-sep {
+      width: 1px; height: 20px;
+      background: rgba(255,255,255,0.09);
+      margin: 0 4px;
+      flex-shrink: 0;
+    }
+    .tb-btn {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.7rem;
+      background: transparent;
+      color: rgba(245,240,232,0.52);
+      border: 1px solid transparent;
+      border-radius: 3px;
+      padding: 4px 6px;
+      cursor: pointer;
+      transition: all 0.11s;
+      min-width: 28px;
+      height: 27px;
+      white-space: nowrap;
+      user-select: none;
+      line-height: 1;
+    }
+    .tb-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .tb-btn:hover {
+      background: rgba(192,57,43,0.18);
+      color: #e8dfc8;
+      border-color: rgba(192,57,43,0.35);
+    }
+    .tb-btn.active {
+      background: rgba(192,57,43,0.28);
+      color: #e8dfc8;
+      border-color: rgba(192,57,43,0.5);
+    }
+    /* tooltip */
+    .tb-btn::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #060403;
+      color: rgba(245,240,232,0.88);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.05em;
+      padding: 3px 7px;
+      border-radius: 2px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 999;
+      border: 1px solid rgba(255,255,255,0.09);
+    }
+    .tb-btn:hover::after { opacity: 1; }
+
+    /* Dropdown */
+    .tb-dropdown { position: relative; display: inline-flex; }
+    .tb-dropdown-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      background: #0c0906;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 3px;
+      z-index: 600;
+      min-width: 170px;
+      padding: 4px 0;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+    }
+    .tb-dropdown.open .tb-dropdown-menu { display: block; }
+    .tb-dd-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 6px 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.7rem;
+      color: rgba(245,240,232,0.68);
+      background: none;
+      border: none;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+      gap: 12px;
+    }
+    .tb-dd-item:hover { background: rgba(192,57,43,0.18); color: #e8dfc8; }
+    .dd-hint {
+      font-size: 0.6rem;
+      color: rgba(245,240,232,0.28);
+      font-style: italic;
+    }
+    .tb-caret { font-size: 0.45rem; opacity: 0.45; margin-left: 1px; }
+
+    /* ── Editor textarea ── */
+    #editor {
+      flex: 1;
+      width: 100%;
+      padding: 1.4rem 1.6rem;
+      background: var(--editor-bg);
+      color: #e8dfc8;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.875rem;
+      line-height: 1.8;
+      border: none;
+      outline: none;
+      resize: none;
+      caret-color: var(--accent);
+      tab-size: 2;
+      overflow-y: auto;
+      overflow-x: auto;
+      white-space: pre;
+      word-wrap: normal;
+    }
+    #editor.word-wrap {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow-x: hidden;
+    }
+    #editor::selection { background: rgba(192,57,43,0.28); }
+    #editor::placeholder { color: rgba(232,223,200,0.18); font-style: italic; }
+    #editor::-webkit-scrollbar { width: 5px; }
+    #editor::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 3px; }
+
+    /* ── Preview Panel ── */
+    .panel-preview { display: flex; flex-direction: column; background: var(--paper); overflow: hidden; flex: 1; min-width: 0; }
+    #preview { flex: 1; overflow-y: auto; padding: 2.5rem 3rem; scroll-behavior: smooth; }
+    #preview::-webkit-scrollbar { width: 6px; }
+    #preview::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Rendered Markdown ── */
+    .md-body { max-width: 680px; margin: 0 auto; }
+    .md-body h1 {
+      font-family: 'Playfair Display', serif; font-size: 2.25rem; font-weight: 900;
+      line-height: 1.15; margin-bottom: 0.6rem; color: var(--ink);
+      border-bottom: 3px solid var(--accent); padding-bottom: 0.5rem;
+    }
+    .md-body h2 {
+      font-family: 'Playfair Display', serif; font-size: 1.55rem; font-weight: 700;
+      margin-top: 2rem; margin-bottom: 0.6rem; color: var(--ink);
+      padding-left: 0.8rem; border-left: 3px solid var(--gold);
+    }
+    .md-body h3 {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.86rem; font-weight: 500;
+      letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent2);
+      margin-top: 1.7rem; margin-bottom: 0.5rem;
+    }
+    .md-body h4,.md-body h5,.md-body h6 {
+      font-family: 'Lora', serif; font-weight: 600;
+      margin-top: 1.3rem; margin-bottom: 0.4rem; color: var(--ink);
+    }
+    .md-body p { line-height: 1.8; margin-bottom: 1.2rem; color: #2a2015; }
+    .md-body a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .md-body a:hover { color: #8e2218; }
+    .md-body strong { font-weight: 700; color: var(--ink); }
+    .md-body em { font-style: italic; }
+    .md-body del { text-decoration: line-through; color: var(--muted); }
+    .md-body mark { background: #f9e04b; padding: 0 2px; border-radius: 2px; }
+    .md-body ul,.md-body ol { padding-left: 1.6rem; margin-bottom: 1.2rem; }
+    .md-body li { line-height: 1.75; margin-bottom: 0.3rem; }
+    .md-body ul li::marker { color: var(--accent); }
+    .md-body ol li::marker { font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; color: var(--muted); }
+    .md-body input[type=checkbox] { accent-color: var(--accent); margin-right: 5px; }
+    .md-body blockquote {
+      margin: 1.5rem 0; padding: 1rem 1.5rem;
+      background: var(--cream); border-left: 4px solid var(--gold);
+      border-radius: 0 2px 2px 0; font-style: italic; color: var(--muted);
+    }
+    .md-body blockquote p { margin-bottom: 0; }
+    .md-body code {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.82em;
+      background: rgba(26,18,8,0.07); padding: 0.15em 0.45em;
+      border-radius: 2px; color: var(--accent); border: 1px solid var(--border);
+    }
+    .md-body pre {
+      background: var(--editor-bg); border-radius: 3px; padding: 0;
+      overflow-x: auto; margin: 1.4rem 0;
+      border: 1px solid rgba(200,189,168,0.3); position: relative;
+    }
+    .md-body pre code.hljs {
+      background: transparent; border: none; padding: 1.2rem 1.4rem;
+      color: #c8d3c0; font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.84rem; line-height: 1.7; display: block;
+    }
+    .copy-code {
+      position: absolute; top: 0.4rem; right: 0.5rem;
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.58rem;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: rgba(200,189,168,0.4); background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.09); border-radius: 2px;
+      padding: 0.18rem 0.5rem; cursor: pointer; transition: all 0.14s; opacity: 0;
+    }
+    .md-body pre:hover .copy-code { opacity: 1; }
+    .copy-code:hover { background: rgba(192,57,43,0.28); color: var(--paper); border-color: var(--accent); }
+    .md-body hr {
+      border: none; border-top: 1.5px solid var(--border); margin: 2rem 0; position: relative;
+    }
+    .md-body hr::after {
+      content: '§'; position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%,-50%); background: var(--paper);
+      padding: 0 0.5rem; color: var(--border); font-family: 'Playfair Display', serif;
+    }
+    .md-body table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.9rem; }
+    .md-body th {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.7rem;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      background: var(--ink); color: var(--paper); padding: 0.6rem 1rem; text-align: left;
+    }
+    .md-body td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); }
+    .md-body tr:hover td { background: var(--cream); }
+    .md-body img { max-width: 100%; border-radius: 2px; border: 1px solid var(--border); margin: 0.8rem 0; }
+
+    /* ── Status Bar ── */
+    .statusbar {
+      background: var(--ink); color: rgba(245,240,232,0.38);
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.6rem;
+      letter-spacing: 0.07em; padding: 0 1.2rem;
+      display: flex; justify-content: space-between; align-items: center;
+      border-top: 1px solid rgba(255,255,255,0.048);
+      flex-shrink: 0; height: 26px;
+    }
+    .s-left,.s-right { display: flex; gap: 1.1rem; align-items: center; }
+    .s-cursor { color: rgba(245,240,232,0.52); }
+
+    /* ── Empty state ── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; height: 100%; color: var(--border);
+      font-family: 'Playfair Display', serif; font-size: 1.05rem;
+      font-style: italic; gap: 0.6rem; text-align: center; padding: 2rem;
+    }
+    .empty-state .big { font-size: 2.5rem; opacity: 0.28; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.62); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #13100a;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 4px; padding: 1.5rem; width: 380px; max-width: 92vw;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.65);
+    }
+    .modal h3 {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem;
+      letter-spacing: 0.13em; text-transform: uppercase;
+      color: rgba(245,240,232,0.55); margin-bottom: 1.1rem;
+    }
+    .modal label {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.63rem;
+      color: rgba(245,240,232,0.4); letter-spacing: 0.08em;
+      display: block; margin-bottom: 3px; text-transform: uppercase;
+    }
+    .modal input {
+      width: 100%; background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.11); border-radius: 2px;
+      color: var(--paper); font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem; padding: 0.46rem 0.7rem; outline: none;
+      margin-bottom: 0.85rem; transition: border-color 0.14s;
+    }
+    .modal input:focus { border-color: rgba(192,57,43,0.45); }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.3rem; }
+    .btn-cancel {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.65rem;
+      letter-spacing: 0.07em; text-transform: uppercase;
+      background: transparent; color: rgba(245,240,232,0.45);
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 2px; padding: 0.38rem 0.85rem; cursor: pointer;
+    }
+    .btn-insert {
+      font-family: 'IBM Plex Mono', monospace; font-size: 0.65rem;
+      letter-spacing: 0.07em; text-transform: uppercase;
+      background: var(--accent); color: #fff;
+      border: none; border-radius: 2px; padding: 0.38rem 0.85rem; cursor: pointer;
+    }
+
+    /* ── Mobile tab switcher ── */
+    .mobile-tabs {
+      display: none;
+      background: var(--editor-surface);
+      border-bottom: 2px solid var(--border);
+      flex-shrink: 0;
+    }
+    .mobile-tabs-inner {
+      display: flex;
+      height: 38px;
+    }
+    .mobile-tab {
+      flex: 1;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(245,240,232,0.45);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: all 0.15s;
+    }
+    .mobile-tab svg { width: 13px; height: 13px; }
+    .mobile-tab.active {
+      color: var(--paper);
+      border-bottom-color: var(--accent);
+    }
+    .mobile-tab:nth-child(2).active { border-bottom-color: var(--accent2); }
+
+    /* ── Responsive ── */
+    @media (max-width: 720px) {
+      /* Header */
+      header {
+        height: auto;
+        padding: 0.45rem 0.9rem;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .logo { font-size: 1.1rem; }
+      .header-title {
+        order: 3;
+        flex: 0 0 100%;
+        width: 100%;
+      }
+      .header-title #titleInput { width: 100%; flex: 1; }
+      #titleInput { font-size: 0.78rem; padding: 0.32rem 0.65rem; }
+      .header-actions { gap: 0.25rem; }
+      .btn .btn-label { display: none; }
+      .btn { padding: 0.38rem 0.55rem; }
+      .hdr-sep { display: none; }
+
+      /* Show mobile tabs */
+      .mobile-tabs { display: block; }
+
+      /* Workspace: fill remaining height, no scrolling at this level */
+      .workspace {
+        flex-direction: row; /* keep row so panels are side by side in DOM */
+        height: 0;           /* will be set by JS */
+        flex: 1;
+        overflow: hidden;
+        position: relative;
+      }
+      .resizer { display: none !important; }
+
+      /* Panels: each fills workspace fully, stacked via absolute */
+      .panel-editor,
+      .panel-preview {
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        flex: none !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+      }
+      .panel-preview { background: var(--paper); }
+
+      /* Hide inactive panel */
+      .mobile-hidden {
+        display: none !important;
+      }
+
+      /* Toolbar: horizontal scroll, no wrap */
+      .toolbar {
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex-wrap: nowrap;
+        padding: 3px 6px;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        flex-shrink: 0;
+      }
+      .toolbar::-webkit-scrollbar { display: none; }
+      .tb-sep { flex-shrink: 0; }
+      .tb-btn { flex-shrink: 0; min-width: 32px; height: 30px; }
+      .tb-btn::after { display: none; } /* no tooltips on touch */
+
+      /* Dropdown: pop up from bottom */
+      .tb-dropdown-menu {
+        position: fixed !important;
+        top: auto !important;
+        bottom: 34px !important;
+        left: 8px !important;
+        right: 8px !important;
+        min-width: unset !important;
+        max-height: 50vh;
+        overflow-y: auto;
+      }
+
+      /* Editor fills its panel */
+      #editor {
+        flex: 1 !important;
+        min-height: 0 !important;
+      }
+
+      /* Preview */
+      #preview { flex: 1; overflow-y: auto; padding: 1.2rem 1rem; }
+      .md-body h1 { font-size: 1.65rem; }
+      .md-body h2 { font-size: 1.25rem; }
+      .md-body table { font-size: 0.78rem; }
+      .md-body th, .md-body td { padding: 0.4rem 0.6rem; }
+
+      /* Status bar */
+      .s-right { display: none; }
+      .statusbar { padding: 0 0.9rem; }
+
+      /* Copy code always visible */
+      .copy-code { opacity: 0.7 !important; }
+
+      /* Hide desktop-only elements on mobile */
+      .desktop-only { display: none !important; }
+
+      /* Modal */
+      .modal { width: calc(100vw - 1rem); max-width: none; margin: 0.5rem; border-radius: 6px; }
+    }
+
+    @media (max-width: 400px) {
+      .logo { font-size: 0.95rem; }
+      #editor { font-size: 0.82rem; padding: 0.9rem; }
+    }
+
+    /* Format button flash */
+    @keyframes formatFlash {
+      0%   { background: rgba(44,122,75,0.35); border-color: rgba(44,122,75,0.6); color: #e8dfc8; }
+      60%  { background: rgba(44,122,75,0.35); border-color: rgba(44,122,75,0.6); color: #e8dfc8; }
+      100% { background: transparent; border-color: transparent; color: rgba(245,240,232,0.52); }
+    }
+    .tb-btn.format-success {
+      animation: formatFlash 1.2s ease forwards;
+    }
+    @keyframes formatSpin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .tb-btn.format-loading svg {
+      animation: formatSpin 0.7s linear infinite;
+    }
+
+
+    /* ══════════════════════════════════════════
+       NOTES SIDEBAR (IndexedDB offline storage)
+       ══════════════════════════════════════════ */
+    .notes-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+    }
+    .notes-overlay.open { display: flex; }
+
+    .notes-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+    }
+
+    .notes-sidebar {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 320px;
+      max-width: 92vw;
+      background: #100d08;
+      border-right: 2px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(-100%);
+      transition: transform 0.22s cubic-bezier(.4,0,.2,1);
+      z-index: 1;
+    }
+    .notes-overlay.open .notes-sidebar {
+      transform: translateX(0);
+    }
+
+    .notes-header {
+      background: var(--editor-surface);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding: 0.75rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+    .notes-header-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--paper);
+      flex: 1;
+    }
+    .notes-header-sub {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.58rem;
+      color: rgba(245,240,232,0.35);
+      letter-spacing: 0.08em;
+    }
+    .notes-close {
+      background: transparent;
+      border: none;
+      color: rgba(245,240,232,0.45);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.12s, background 0.12s;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .notes-close:hover { background: rgba(255,255,255,0.08); }
+    .notes-close:hover { color: var(--paper); background: rgba(255,255,255,0.08); }
+    .notes-close svg { width: 16px; height: 16px; }
+
+    .notes-search-wrap {
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      flex-shrink: 0;
+      background: var(--editor-surface);
+    }
+    #notesSearch {
+      width: 100%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 3px;
+      color: var(--paper);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.75rem;
+      padding: 0.38rem 0.65rem;
+      outline: none;
+      transition: border-color 0.14s;
+    }
+    #notesSearch::placeholder { color: rgba(245,240,232,0.22); }
+    #notesSearch:focus { border-color: rgba(192,57,43,0.5); }
+
+    .notes-actions {
+      padding: 0.5rem 0.8rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+    .notes-btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      border-radius: 2px;
+      padding: 0.32rem 0.7rem;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      transition: all 0.13s;
+      white-space: nowrap;
+    }
+    .notes-btn svg { width: 11px; height: 11px; flex-shrink: 0; }
+    .notes-btn-primary {
+      background: var(--accent2);
+      color: #fff;
+      border-color: var(--accent2);
+    }
+    .notes-btn-primary:hover { background: #1d4e30; }
+    .notes-btn-ghost {
+      background: transparent;
+      color: rgba(245,240,232,0.55);
+      border-color: rgba(255,255,255,0.12);
+    }
+    .notes-btn-ghost:hover { background: rgba(255,255,255,0.07); color: var(--paper); }
+    .notes-btn-danger {
+      background: transparent;
+      color: rgba(192,57,43,0.7);
+      border-color: rgba(192,57,43,0.25);
+    }
+    .notes-btn-danger:hover { background: rgba(192,57,43,0.15); color: var(--accent); }
+
+    .notes-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.4rem 0;
+    }
+    .notes-list::-webkit-scrollbar { width: 4px; }
+    .notes-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .notes-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: rgba(245,240,232,0.2);
+      font-family: 'Playfair Display', serif;
+      font-size: 0.9rem;
+      font-style: italic;
+      gap: 0.5rem;
+      padding: 2rem;
+      text-align: center;
+    }
+    .notes-empty-icon { font-size: 2rem; opacity: 0.3; }
+
+    .note-item {
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,0.045);
+      cursor: pointer;
+      transition: background 0.12s;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+    }
+    .note-item:hover { background: rgba(255,255,255,0.04); }
+    .note-item.active { background: rgba(192,57,43,0.12); border-left: 2px solid var(--accent); padding-left: calc(1rem - 2px); }
+    .note-item-body { flex: 1; min-width: 0; }
+    .note-item-title {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--paper);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 2px;
+    }
+    .note-item-preview {
+      font-family: 'Lora', serif;
+      font-size: 0.68rem;
+      color: rgba(245,240,232,0.38);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .note-item-meta {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.55rem;
+      color: rgba(245,240,232,0.25);
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .note-item-del {
+      background: transparent;
+      border: none;
+      color: rgba(192,57,43,0.4);
+      cursor: pointer;
+      padding: 2px 3px;
+      border-radius: 2px;
+      opacity: 0;
+      transition: opacity 0.12s, color 0.12s;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .note-item:hover .note-item-del { opacity: 1; }
+    .note-item-del:hover { color: var(--accent); }
+    .note-item-del svg { width: 12px; height: 12px; }
+
+    .notes-footer {
+      padding: 0.5rem 1rem;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.55rem;
+      color: rgba(245,240,232,0.22);
+      letter-spacing: 0.06em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    /* autosave indicator in header */
+    .autosave-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent2);
+      display: block;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.3s, background 0.3s;
+    }
+    .autosave-dot.saving { opacity: 1; background: var(--gold); }
+    .autosave-dot.saved  { opacity: 1; background: var(--accent2); }
+    .autosave-dot.unsaved { opacity: 1; background: rgba(245,240,232,0.3); }
+
+    /* Notes button in header */
+    .btn-notes {
+      background: rgba(255,255,255,0.06);
+      color: rgba(245,240,232,0.75);
+      border-color: rgba(255,255,255,0.14);
+      position: relative;
+    }
+    .btn-notes:hover { background: rgba(255,255,255,0.12); color: var(--paper); border-color: rgba(255,255,255,0.3); }
+    .btn-notes-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: var(--accent);
+      color: #fff;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.5rem;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      pointer-events: none;
+    }
+
+
+    /* ── Autosave Settings panel ── */
+    .notes-settings {
+      border-top: 1px solid rgba(255,255,255,0.07);
+      flex-shrink: 0;
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.22s ease;
+    }
+    .notes-settings.open { max-height: 200px; }
+    .notes-settings-inner {
+      padding: 0.7rem 1rem 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .settings-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.07em;
+      color: rgba(245,240,232,0.5);
+      flex: 1;
+    }
+    .settings-label span {
+      color: rgba(245,240,232,0.22);
+      font-size: 0.55rem;
+    }
+    /* toggle switch */
+    .toggle-wrap {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .toggle-wrap input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 9px;
+      cursor: pointer;
+      transition: background 0.18s;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 12px; height: 12px;
+      background: rgba(245,240,232,0.4);
+      border-radius: 50%;
+      transition: transform 0.18s, background 0.18s;
+    }
+    .toggle-wrap input:checked + .toggle-track {
+      background: var(--accent2);
+      border-color: var(--accent2);
+    }
+    .toggle-wrap input:checked + .toggle-track::after {
+      transform: translateX(14px);
+      background: #fff;
+    }
+    /* interval input */
+    .settings-interval {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      opacity: 0.35;
+      pointer-events: none;
+      transition: opacity 0.18s;
+    }
+    .settings-interval.enabled {
+      opacity: 1;
+      pointer-events: all;
+    }
+    .interval-input {
+      width: 46px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 3px;
+      color: var(--paper);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.7rem;
+      padding: 0.22rem 0.45rem;
+      outline: none;
+      text-align: center;
+      transition: border-color 0.13s;
+    }
+    .interval-input:focus { border-color: rgba(44,122,75,0.6); }
+    .interval-unit {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.6rem;
+      color: rgba(245,240,232,0.35);
+    }
+    .settings-gear-btn {
+      background: transparent;
+      border: none;
+      color: rgba(245,240,232,0.3);
+      cursor: pointer;
+      padding: 3px 5px;
+      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      transition: color 0.13s;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.06em;
+      gap: 4px;
+    }
+    .settings-gear-btn:hover { color: rgba(245,240,232,0.7); }
+    .settings-gear-btn svg { width: 11px; height: 11px; }
+
+
+    /* ── Google Drive Sync ─────────────────────────────────── */
+    .drive-bar {
+      background: var(--editor-surface);
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 0.55rem 1rem;
+      flex-shrink: 0;
+    }
+    .drive-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .drive-avatar {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex-shrink: 0;
+      border: 1.5px solid rgba(255,255,255,0.15);
+    }
+    .drive-avatar-placeholder {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1.5px solid rgba(255,255,255,0.12);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; color: rgba(245,240,232,0.4);
+      flex-shrink: 0;
+    }
+    .drive-user-info { flex: 1; min-width: 0; }
+    .drive-user-name {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--paper);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .drive-user-email {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.54rem;
+      color: rgba(245,240,232,0.3);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .drive-sign-btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      border-radius: 2px;
+      padding: 0.28rem 0.65rem;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      transition: all 0.13s; white-space: nowrap; flex-shrink: 0;
+    }
+    .drive-sign-btn svg { width: 11px; height: 11px; }
+    .drive-btn-signin {
+      background: #4285f4; color: #fff; border-color: #4285f4;
+    }
+    .drive-btn-signin:hover { background: #2a6dd9; }
+    .drive-btn-signout {
+      background: transparent;
+      color: rgba(245,240,232,0.4);
+      border-color: rgba(255,255,255,0.1);
+    }
+    .drive-btn-signout:hover { color: var(--accent); border-color: rgba(192,57,43,0.3); }
+    .drive-sync-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-top: 0.4rem;
+    }
+    .drive-sync-status {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.57rem;
+      color: rgba(245,240,232,0.3);
+      flex: 1;
+      letter-spacing: 0.04em;
+    }
+    .drive-sync-status.syncing { color: var(--gold); }
+    .drive-sync-status.synced  { color: var(--accent2); }
+    .drive-sync-status.error   { color: var(--accent); }
+    .drive-sync-status.offline { color: rgba(245,240,232,0.22); }
+    .drive-sync-btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.57rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: transparent;
+      color: rgba(245,240,232,0.35);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 2px;
+      padding: 0.2rem 0.5rem;
+      cursor: pointer;
+      transition: all 0.13s;
+      display: inline-flex; align-items: center; gap: 0.3rem;
+    }
+    .drive-sync-btn svg { width: 10px; height: 10px; }
+    .drive-sync-btn:hover { color: var(--paper); border-color: rgba(255,255,255,0.2); }
+    .drive-sync-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    @keyframes spinSvg { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    .drive-sync-btn.syncing svg { animation: spinSvg 0.9s linear infinite; }
+    .drive-offline-badge {
+      display: none;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.52rem;
+      letter-spacing: 0.06em;
+      background: rgba(184,134,11,0.18);
+      color: var(--gold);
+      border: 1px solid rgba(184,134,11,0.3);
+      border-radius: 2px;
+      padding: 0.15rem 0.4rem;
+    }
+    .drive-offline-badge.show { display: inline-block; }
+
+    /* fade-in */
+    @keyframes fadeUp { from { opacity:0; transform:translateY(4px);} to{opacity:1;transform:translateY(0);}}
+    .md-body > * { animation: fadeUp 0.2s ease both; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Mark<span class="logo-dot">●</span>Flow</div>
+  <div class="header-title">
+    <input id="titleInput" type="text" placeholder="Untitled document…" autocomplete="off" spellcheck="false"/>
+    <span class="autosave-dot" id="autosaveDot" title="Autosave status"></span>
+  </div>
+  <div class="header-actions">
+    <!-- Notes button -->
+    <button class="btn btn-notes btn-ghost" onclick="openNotes()" id="btnNotes">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="2" width="12" height="12" rx="1.5"/><line x1="5" y1="5.5" x2="11" y2="5.5" stroke-linecap="round"/><line x1="5" y1="8" x2="11" y2="8" stroke-linecap="round"/><line x1="5" y1="10.5" x2="8" y2="10.5" stroke-linecap="round"/></svg>
+      <span class="btn-label">Notes</span>
+      <span class="btn-notes-badge" id="notesBadge" style="display:none">0</span>
+    </button>
+    <div class="hdr-sep"></div>
+    <button class="btn btn-ghost" onclick="loadSample()">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
+      <span class="btn-label">Sample</span>
+    </button>
+    <div class="hdr-sep"></div>
+    <input type="file" id="fileInput" accept=".md,.markdown,.txt"/>
+    <button class="btn btn-ghost" onclick="document.getElementById('fileInput').click()">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z"/><path d="M9 2v4h4"/></svg>
+      <span class="btn-label">Load .md</span>
+    </button>
+    <button class="btn btn-save" onclick="saveFile()">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 14V4l3-3h7l2 2v11H2z"/><path d="M5 14V9h6v5"/><path d="M10 1v4H5"/></svg>
+      <span class="btn-label">Save .md</span>
+    </button>
+    <div class="hdr-sep"></div>
+    <button class="btn btn-ghost" onclick="clearAll()">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 4h10M6 2h4M7 7v5M9 7v5M4 4l.8 10h6.4L12 4"/></svg>
+      <span class="btn-label">Clear</span>
+    </button>
+    <button class="btn btn-copy" onclick="copyHTML()">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M2 11V2h9"/></svg>
+      <span class="btn-label">Copy HTML</span>
+    </button>
+  </div>
+</header>
+
+<!-- ── Mobile tab switcher (hidden on desktop) ── -->
+<div class="mobile-tabs" id="mobileTabs">
+  <div class="mobile-tabs-inner">
+    <button class="mobile-tab active" id="tabEditor" onclick="switchMobileTab('editor')">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="14" height="12" rx="1.5"/><line x1="4" y1="6" x2="12" y2="6" stroke-linecap="round"/><line x1="4" y1="9" x2="9" y2="9" stroke-linecap="round"/></svg>
+      Editor
+    </button>
+    <button class="mobile-tab" id="tabPreview" onclick="switchMobileTab('preview')">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+      Preview
+    </button>
+  </div>
+</div>
+
+<div class="workspace">
+
+  <!-- Editor -->
+  <div class="panel-editor">
+    <div class="panel-label"><span class="dot"></span> Markdown Source</div>
+
+    <!-- ── Advanced Toolbar ── -->
+    <div class="toolbar">
+
+      <!-- Headings dropdown -->
+      <div class="tb-dropdown" id="dd-heading">
+        <button class="tb-btn" data-tip="Headings" onclick="toggleDropdown('dd-heading')">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h2v4h4V3h2v10H8V9H4v4H2z"/></svg>
+          <span class="tb-caret">▾</span>
+        </button>
+        <div class="tb-dropdown-menu">
+          <button class="tb-dd-item" onclick="insertHeading(1); closeDropdowns()"><b style="font-size:1rem">H1</b> <span class="dd-hint"># Heading 1</span></button>
+          <button class="tb-dd-item" onclick="insertHeading(2); closeDropdowns()"><b style="font-size:.9rem">H2</b> <span class="dd-hint">## Heading 2</span></button>
+          <button class="tb-dd-item" onclick="insertHeading(3); closeDropdowns()"><b style="font-size:.82rem">H3</b> <span class="dd-hint">### Heading 3</span></button>
+          <button class="tb-dd-item" onclick="insertHeading(4); closeDropdowns()"><b style="font-size:.76rem">H4</b> <span class="dd-hint">#### Heading 4</span></button>
+          <button class="tb-dd-item" onclick="insertHeading(5); closeDropdowns()"><b style="font-size:.72rem">H5</b> <span class="dd-hint">##### Heading 5</span></button>
+          <button class="tb-dd-item" onclick="insertHeading(6); closeDropdowns()"><b style="font-size:.68rem">H6</b> <span class="dd-hint">###### Heading 6</span></button>
+        </div>
+      </div>
+
+      <div class="tb-sep"></div>
+
+      <!-- Inline formatting -->
+      <button class="tb-btn" data-tip="Bold  Ctrl+B" onclick="wrapSel('**','**')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 3h4.5a3 3 0 010 6H4zm0 6h5a3 3 0 010 6H4z" opacity=".9"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Italic  Ctrl+I" onclick="wrapSel('*','*')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M7 3h4l-1 1-3 8 1 1H4l1-1 3-8z"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Strikethrough" onclick="wrapSel('~~','~~')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 11.5c0 1.1.9 2.5 3 2.5s3-1.4 3-2.5"/><path d="M11 4.5C11 3.4 10.1 2 8 2S5 3.4 5 4.5"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Underline (HTML)" onclick="wrapSel('<u>','</u>')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 3v5a4 4 0 008 0V3H10v5a2 2 0 01-4 0V3z"/><rect x="3" y="13" width="10" height="1.5" rx=".75"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Highlight" onclick="wrapSel('<mark>','</mark>')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2l5 5-6 6H3v-5z"/><line x1="1" y1="15" x2="5" y2="15" stroke-width="1.8"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Superscript  e.g. X²" onclick="wrapSel('<sup>','</sup>')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><text x="1" y="14" font-size="10" font-family="serif">X</text><text x="9" y="8" font-size="7" font-family="serif">2</text></svg>
+      </button>
+      <button class="tb-btn" data-tip="Subscript  e.g. H₂O" onclick="wrapSel('<sub>','</sub>')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><text x="1" y="11" font-size="10" font-family="serif">X</text><text x="9" y="15" font-size="7" font-family="serif">2</text></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <!-- Lists -->
+      <button class="tb-btn" data-tip="Bullet list" onclick="insertLinePrefix('- ')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="3" cy="4.5" r="1.2" fill="currentColor" stroke="none"/><line x1="6.5" y1="4.5" x2="14" y2="4.5"/><circle cx="3" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><line x1="6.5" y1="8.5" x2="14" y2="8.5"/><circle cx="3" cy="12.5" r="1.2" fill="currentColor" stroke="none"/><line x1="6.5" y1="12.5" x2="14" y2="12.5"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Ordered list" onclick="insertLinePrefix('1. ')">
+        <svg viewBox="0 0 16 16" fill="currentColor" stroke="none"><text x="1" y="6" font-size="4.5" font-family="monospace">1.</text><text x="1" y="10" font-size="4.5" font-family="monospace">2.</text><text x="1" y="14" font-size="4.5" font-family="monospace">3.</text><rect x="6" y="4" width="8" height="1.2" rx=".6"/><rect x="6" y="8" width="8" height="1.2" rx=".6"/><rect x="6" y="12" width="8" height="1.2" rx=".6"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Task / checklist" onclick="insertLinePrefix('- [ ] ')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="5" height="5" rx="1"/><path d="M2.5 5l1.5 1.5L6 4" stroke-linecap="round" stroke-linejoin="round"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><line x1="8.5" y1="5" x2="14.5" y2="5"/><line x1="8.5" y1="12" x2="14.5" y2="12"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Indent  Tab" onclick="indentLine()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 5l3.5 3L6 11" stroke-linecap="round" stroke-linejoin="round"/><line x1="2" y1="8" x2="5" y2="8"/><line x1="11" y1="5" x2="14" y2="5"/><line x1="11" y1="8" x2="14" y2="8"/><line x1="11" y1="11" x2="14" y2="11"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Outdent" onclick="outdentLine()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 5L6.5 8l3.5 3" stroke-linecap="round" stroke-linejoin="round"/><line x1="2" y1="5" x2="5" y2="5"/><line x1="2" y1="8" x2="5" y2="8"/><line x1="2" y1="11" x2="5" y2="11"/><line x1="11" y1="8" x2="14" y2="8"/></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <!-- Block elements -->
+      <button class="tb-btn" data-tip="Blockquote" onclick="insertLinePrefix('> ')">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 5h3v3H3c0 1.7.8 2.8 2 3.5L4 13C1.8 12 1 10 1 8V5zm8 0h3v3h-2c0 1.7.8 2.8 2 3.5L12 13C9.8 12 9 10 9 8V5z" opacity=".85"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Inline code  Ctrl+`" onclick="wrapSel('`','`')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4.5L1.5 8 5 11.5M11 4.5L14.5 8 11 11.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+
+      <!-- Code block dropdown -->
+      <div class="tb-dropdown" id="dd-code">
+        <button class="tb-btn" data-tip="Code block" onclick="toggleDropdown('dd-code')">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1.5"/><path d="M4.5 6.5L2.5 8.5l2 2M11.5 6.5l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/><line x1="7" y1="11" x2="9" y2="5" stroke-linecap="round"/></svg>
+          <span class="tb-caret">▾</span>
+        </button>
+        <div class="tb-dropdown-menu">
+          <button class="tb-dd-item" onclick="insertCodeBlock(''); closeDropdowns()">Plain text</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('javascript'); closeDropdowns()">JavaScript</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('typescript'); closeDropdowns()">TypeScript</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('python'); closeDropdowns()">Python</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('bash'); closeDropdowns()">Bash / Shell</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('html'); closeDropdowns()">HTML</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('css'); closeDropdowns()">CSS</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('json'); closeDropdowns()">JSON</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('sql'); closeDropdowns()">SQL</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('rust'); closeDropdowns()">Rust</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('go'); closeDropdowns()">Go</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('java'); closeDropdowns()">Java</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('cpp'); closeDropdowns()">C++</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('csharp'); closeDropdowns()">C#</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('php'); closeDropdowns()">PHP</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('ruby'); closeDropdowns()">Ruby</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('yaml'); closeDropdowns()">YAML</button>
+          <button class="tb-dd-item" onclick="insertCodeBlock('markdown'); closeDropdowns()">Markdown</button>
+        </div>
+      </div>
+
+      <div class="tb-sep"></div>
+
+      <!-- Links & Media -->
+      <button class="tb-btn" data-tip="Insert link  Ctrl+K" onclick="openModal('link')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6.5 9.5a3.54 3.54 0 005.05 0l2-2a3.54 3.54 0 00-5.05-5.05l-1.06 1.06M9.5 6.5a3.54 3.54 0 00-5.05 0l-2 2a3.54 3.54 0 005.05 5.05l1.06-1.06" stroke-linecap="round"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Insert image" onclick="openModal('image')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="3.5" width="13" height="9" rx="1"/><circle cx="5.5" cy="7" r="1.3" fill="currentColor" stroke="none"/><path d="M1.5 10.5l4-4 3 3 2-2 4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+
+      <!-- Table dropdown -->
+      <div class="tb-dropdown" id="dd-table">
+        <button class="tb-btn" data-tip="Insert table" onclick="toggleDropdown('dd-table')">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><line x1="1.5" y1="6.5" x2="14.5" y2="6.5"/><line x1="6" y1="2.5" x2="6" y2="13.5"/><line x1="10.5" y1="2.5" x2="10.5" y2="13.5"/></svg>
+          <span class="tb-caret">▾</span>
+        </button>
+        <div class="tb-dropdown-menu">
+          <button class="tb-dd-item" onclick="insertTable(2,2); closeDropdowns()">2 × 2 table</button>
+          <button class="tb-dd-item" onclick="insertTable(3,3); closeDropdowns()">3 × 3 table</button>
+          <button class="tb-dd-item" onclick="insertTable(4,4); closeDropdowns()">4 × 4 table</button>
+          <button class="tb-dd-item" onclick="insertTable(3,5); closeDropdowns()">5 columns × 3 rows</button>
+        </div>
+      </div>
+
+      <div class="tb-sep"></div>
+
+      <!-- Misc -->
+      <button class="tb-btn" data-tip="Horizontal rule" onclick="insertHR()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><line x1="1" y1="8" x2="15" y2="8" stroke-linecap="round"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Footnote" onclick="insertFootnote()">
+        <svg viewBox="0 0 16 16" fill="currentColor"><text x="1" y="11" font-size="9" font-family="monospace">fn</text><text x="9" y="7" font-size="7" font-family="monospace" fill="#c0392b">¹</text></svg>
+      </button>
+      <button class="tb-btn" data-tip="Keyboard key  e.g. Ctrl" onclick="wrapSel('<kbd>','</kbd>')">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><rect x="4" y="6.5" width="2" height="2" rx=".4" fill="currentColor" stroke="none"/><rect x="7" y="6.5" width="2" height="2" rx=".4" fill="currentColor" stroke="none"/><rect x="10" y="6.5" width="2" height="2" rx=".4" fill="currentColor" stroke="none"/><rect x="5" y="9.5" width="6" height="1.5" rx=".4" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Details / collapsible" onclick="insertDetails()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"/><line x1="8" y1="8" x2="14" y2="8" stroke-linecap="round"/><line x1="1" y1="2" x2="15" y2="2" stroke-linecap="round"/><line x1="1" y1="14" x2="15" y2="14" stroke-linecap="round"/></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <!-- Undo/Redo -->
+      <button class="tb-btn" data-tip="Undo  Ctrl+Z" onclick="editorUndo()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3.5 7.5a5 5 0 105 5" stroke-linecap="round"/><path d="M3.5 3.5v4h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="tb-btn" data-tip="Redo  Ctrl+Y / Ctrl+Shift+Z" onclick="editorRedo()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12.5 7.5a5 5 0 11-5 5" stroke-linecap="round"/><path d="M12.5 3.5v4h-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+
+      <div class="tb-sep desktop-only"></div>
+
+      <!-- Toggle preview (desktop only) -->
+      <button class="tb-btn desktop-only" id="btnTogglePreview" data-tip="Toggle preview" onclick="togglePreview()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+      </button>
+      <!-- Toggle word wrap -->
+      <button class="tb-btn active" id="btnWordWrap" data-tip="Toggle word wrap" onclick="toggleWordWrap()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8a2 2 0 010 4H8m0 0l2-2m-2 2l2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <!-- Format markdown -->
+      <button class="tb-btn" id="btnFormat" data-tip="Format Markdown  Ctrl+Shift+F" onclick="formatMarkdown()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M2 6h12M2 9h6M2 12h10" stroke-linecap="round"/><path d="M12 10l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span style="font-size:0.62rem;letter-spacing:0.06em">Format</span>
+      </button>
+
+    </div><!-- /toolbar -->
+
+    <textarea id="editor" spellcheck="false" placeholder="Write your Markdown here…"></textarea>
+  </div>
+
+  <!-- Resizer -->
+  <div class="resizer" id="resizer">
+    <div class="resizer-tooltip">drag to resize</div>
+  </div>
+
+  <!-- Preview -->
+  <div class="panel-preview" id="panelPreview">
+    <div class="panel-label"><span class="dot"></span> Rendered Preview</div>
+    <div id="preview">
+      <div class="empty-state" id="emptyState">
+        <span class="big">✦</span>
+        Start typing in the editor<br>to see your rendered Markdown
+      </div>
+      <div class="md-body" id="output"></div>
+    </div>
+  </div>
+
+</div><!-- /workspace -->
+
+<div class="statusbar">
+  <div class="s-left">
+    <span id="stat-words">0 words</span>
+    <span id="stat-chars">0 chars</span>
+    <span id="stat-lines">0 lines</span>
+    <span id="stat-cursor" class="s-cursor">Ln 1, Col 1</span>
+  </div>
+  <div class="s-right">
+    <span>marked.js v9.1.6</span>
+    <span>highlight.js v11.9.0</span>
+    <span>MarkFlow</span>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h3 id="modalTitle">Insert</h3>
+    <div id="modalFields"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-insert" onclick="modalInsert()">Insert</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ NOTES SIDEBAR ══════════════ -->
+<div class="notes-overlay" id="notesOverlay">
+  <div class="notes-backdrop" onclick="closeNotes()"></div>
+  <div class="notes-sidebar">
+    <div class="notes-header">
+      <div>
+        <div class="notes-header-title">📓 My Notes</div>
+        <div class="notes-header-sub" id="notesHeaderSub">Saved in browser · works offline</div>
+      </div>
+      <button class="notes-close" onclick="closeNotes()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+      </button>
+    </div>
+    <!-- Google Drive sync bar -->
+    <div class="drive-bar" id="driveBar">
+      <div class="drive-bar-row">
+        <div class="drive-avatar-placeholder" id="driveAvatar">☁</div>
+        <div class="drive-user-info">
+          <div class="drive-user-name" id="driveUserName">Not signed in</div>
+          <div class="drive-user-email" id="driveUserEmail">Sign in to sync with Google Drive</div>
+        </div>
+        <button class="drive-sign-btn drive-btn-signin" id="driveSignBtn" onclick="driveSignIn()">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2a5 5 0 11-3.54 8.54L8 8V3z" opacity=".5"/><path d="M8 3v5l3.54 3.54A5 5 0 008 3z"/></svg>
+          Sign in
+        </button>
+      </div>
+      <div class="drive-sync-row" id="driveSyncRow" style="display:none">
+        <span class="drive-sync-status" id="driveSyncStatus">Ready</span>
+        <span class="drive-offline-badge" id="driveOfflineBadge">OFFLINE</span>
+        <button class="drive-sync-btn" id="driveSyncBtn" onclick="driveSync()" title="Sync now">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8a6 6 0 0110.4-4M14 8a6 6 0 01-10.4 4" stroke-linecap="round"/><path d="M11 4.5l1.5-1L14 5" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 11.5l-1.5 1L2 11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Sync
+        </button>
+      </div>
+    </div>
+
+    <div class="notes-search-wrap">
+      <input id="notesSearch" type="text" placeholder="Search notes…" oninput="renderNotesList()" autocomplete="off"/>
+    </div>
+    <div class="notes-actions">
+      <button class="notes-btn notes-btn-primary" onclick="saveNoteFromEditor()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 14V4l3-3h7l2 2v11H2z"/><path d="M5 14V9h6v5"/><path d="M10 1v4H5"/></svg>
+        Save current
+      </button>
+      <button class="notes-btn notes-btn-ghost" onclick="newNote()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
+        New note
+      </button>
+      <button class="notes-btn notes-btn-danger" id="btnDeleteAll" onclick="deleteAllNotes()" style="margin-left:auto">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6 2h4M7 7v5M9 7v5M4 4l.8 10h6.4L12 4"/></svg>
+        All
+      </button>
+    </div>
+    <div class="notes-list" id="notesList">
+      <div class="notes-empty">
+        <div class="notes-empty-icon">📄</div>
+        No notes yet.<br>Save your current document to get started.
+      </div>
+    </div>
+    <!-- Autosave settings panel -->
+    <div class="notes-settings" id="notesSettings">
+      <div class="notes-settings-inner">
+        <div class="settings-row">
+          <div class="settings-label">Autosave <span>(saves after idle)</span></div>
+          <label class="toggle-wrap">
+            <input type="checkbox" id="autosaveToggle" onchange="onAutosaveToggle()"/>
+            <div class="toggle-track"></div>
+          </label>
+        </div>
+        <div class="settings-row settings-interval" id="intervalRow">
+          <div class="settings-label">Interval</div>
+          <input class="interval-input" type="number" id="autosaveInterval" min="5" max="300" value="30" onchange="onIntervalChange()" oninput="onIntervalChange()"/>
+          <span class="interval-unit">sec</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes-footer">
+      <span id="notesCount">0 notes</span>
+      <button class="settings-gear-btn" onclick="toggleSettingsPanel()" id="settingsGearBtn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke-linecap="round"/></svg>
+        Settings
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+
+
+// ════════════════════════════════════════════════════════
+//  NOTES — IndexedDB offline storage (like Google Docs)
+// ════════════════════════════════════════════════════════
+const DB_NAME    = 'MarkFlowDB';
+const DB_VERSION = 2;   // v2: id is now a UUID string (no autoIncrement)
+const STORE      = 'notes';
+let db           = null;
+let currentNoteId = null;  // ID of the note currently loaded in editor
+let isDirty       = false;
+
+// ── Open / init IndexedDB ──────────────────────────────
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const database = e.target.result;
+      if (!database.objectStoreNames.contains(STORE)) {
+        // keyPath: 'id' — we supply a UUID string; no autoIncrement needed
+        const store = database.createObjectStore(STORE, { keyPath: 'id' });
+        store.createIndex('updatedAt', 'updatedAt');
+        store.createIndex('title',     'title');
+      }
+    };
+    req.onsuccess = e => { db = e.target.result; resolve(db); };
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// ── CRUD helpers ──────────────────────────────────────
+function dbGetAll() {
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).index('updatedAt').getAll();
+    req.onsuccess = e => resolve(e.target.result.reverse()); // newest first
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbGet(id) {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(id);
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbPut(note) {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE, 'readwrite').objectStore(STORE).put(note);
+    req.onsuccess = e => resolve(e.target.result); // returns id
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbDelete(id) {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE, 'readwrite').objectStore(STORE).delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+function dbClear() {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(STORE, 'readwrite').objectStore(STORE).clear();
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// ── Autosave settings (persisted in localStorage) ────────────
+const AS_KEY = 'markflow_autosave'; // localStorage key
+
+function loadAutosaveSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(AS_KEY) || '{}');
+    return {
+      enabled:  s.enabled  ?? false,          // OFF by default
+      interval: s.interval ?? 30,             // 30 seconds default
+    };
+  } catch { return { enabled: false, interval: 30 }; }
+}
+
+function saveAutosaveSettings(enabled, interval) {
+  try { localStorage.setItem(AS_KEY, JSON.stringify({ enabled, interval })); } catch {}
+}
+
+let autosaveSettings = loadAutosaveSettings();
+let autosaveTimer    = null;
+
+// Apply persisted settings to UI once DOM is ready
+function applyAutosaveSettingsToUI() {
+  const toggle   = document.getElementById('autosaveToggle');
+  const inputEl  = document.getElementById('autosaveInterval');
+  const row      = document.getElementById('intervalRow');
+  if (!toggle) return;
+  toggle.checked  = autosaveSettings.enabled;
+  inputEl.value   = autosaveSettings.interval;
+  row.classList.toggle('enabled', autosaveSettings.enabled);
+  updateAutosaveDotTitle();
+}
+
+function onAutosaveToggle() {
+  const toggle  = document.getElementById('autosaveToggle');
+  const row     = document.getElementById('intervalRow');
+  autosaveSettings.enabled = toggle.checked;
+  saveAutosaveSettings(autosaveSettings.enabled, autosaveSettings.interval);
+  row.classList.toggle('enabled', autosaveSettings.enabled);
+  updateAutosaveDotTitle();
+  // If just enabled and there are unsaved changes, start the timer immediately
+  if (autosaveSettings.enabled && isDirty) scheduleAutosave();
+  else clearTimeout(autosaveTimer);
+}
+
+function onIntervalChange() {
+  const inputEl = document.getElementById('autosaveInterval');
+  let v = parseInt(inputEl.value, 10);
+  if (isNaN(v) || v < 5)   v = 5;
+  if (v > 300) v = 300;
+  autosaveSettings.interval = v;
+  saveAutosaveSettings(autosaveSettings.enabled, autosaveSettings.interval);
+}
+
+function toggleSettingsPanel() {
+  const panel = document.getElementById('notesSettings');
+  panel.classList.toggle('open');
+  applyAutosaveSettingsToUI();
+}
+
+function scheduleAutosave() {
+  if (!autosaveSettings.enabled) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(doAutosave, autosaveSettings.interval * 1000);
+}
+
+async function _baseDoAutosave() {
+  if (!isDirty || !db || !autosaveSettings.enabled) return;
+  if (isNoteEmpty()) return;   // never autosave an empty document
+  setAutosaveDot('saving');
+  try {
+    await doSaveNote();        // doSaveNote always upserts using the stable UUID
+    isDirty = false;
+    setAutosaveDot('saved');
+    setTimeout(() => { setAutosaveDot(''); updateAutosaveDotTitle(); }, 2500);
+    await renderNotesList();   // refresh list so updatedAt timestamp updates
+  } catch (e) {
+    setAutosaveDot('unsaved');
+    console.error('Autosave failed:', e);
+  }
+}
+
+function updateAutosaveDotTitle() {
+  const dot = document.getElementById('autosaveDot');
+  if (!dot) return;
+  if (autosaveSettings.enabled) {
+    dot.title = isDirty
+      ? 'Unsaved — autosave in ' + autosaveSettings.interval + 's'
+      : 'Autosave ON · ' + autosaveSettings.interval + 's interval';
+  } else {
+    dot.title = isDirty ? 'Unsaved — press Ctrl+S to save' : 'Autosave OFF';
+  }
+}
+
+// ── markDirty ──────────────────────────────────────────
+function markDirty() {
+  if (isNoteEmpty()) return;   // don't mark dirty for empty docs
+  // Assign UUID on first keystroke so all subsequent saves hit the same record
+  ensureNoteId();
+  isDirty = true;
+  setAutosaveDot('unsaved');
+  updateAutosaveDotTitle();
+  if (autosaveSettings.enabled) scheduleAutosave();
+}
+
+function setAutosaveDot(state) {
+  const dot = document.getElementById('autosaveDot');
+  if (!dot) return;
+  dot.className = 'autosave-dot' + (state ? ' ' + state : '');
+  // Title is managed by updateAutosaveDotTitle, except for transient states
+  if (state === 'saving') dot.title = 'Saving…';
+  else if (state === 'saved') dot.title = 'Saved ✓';
+  else updateAutosaveDotTitle();
+}
+
+// ════════════════════════════════════════════════════════
+//  CORE NOTE CRUD — each note has a stable UUID so it
+//  is never duplicated regardless of how many times save
+//  or autosave is called.
+// ════════════════════════════════════════════════════════
+
+// Generate a UUID v4 (RFC 4122) without external deps
+function genUUID() {
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+// ── Helpers ───────────────────────────────────────────
+function isNoteEmpty() {
+  return !editor.value.trim() && !titleEl.value.trim();
+}
+
+// ── CREATE — assign a UUID to the current unsaved session ──
+// Called the FIRST time the user starts editing a new (blank) document.
+// Sets currentNoteId to a fresh UUID so all subsequent saves (manual or auto)
+// update the SAME record — never create a duplicate.
+function ensureNoteId() {
+  if (!currentNoteId) {
+    currentNoteId = genUUID();
+  }
+  return currentNoteId;
+}
+
+// ── SAVE (create or update) ────────────────────────────
+// Uses IndexedDB put() which does an UPSERT keyed on the note's `id` field.
+// Because we always call ensureNoteId() first, the same UUID is reused on
+// every save — so autosave, manual save, and Ctrl+S all update the same row.
+async function doSaveNote() {
+  // Refuse to save empty notes
+  if (isNoteEmpty()) return null;
+
+  const id  = ensureNoteId();   // stable UUID for this editing session
+  const now = Date.now();
+
+  // Fetch existing record so we preserve createdAt
+  let existing = null;
+  try { existing = await dbGet(id); } catch {}
+
+  const note = {
+    id,
+    title:     titleEl.value.trim() || 'Untitled',
+    body:      editor.value,
+    createdAt: existing ? existing.createdAt : now,   // preserve original date
+    updatedAt: now,
+    wordCount: editor.value.trim().split(/\s+/).filter(Boolean).length,
+  };
+
+  await dbPut(note);
+  await refreshNotesBadge();
+  return id;
+}
+
+// ── Manual save (button / Ctrl+S) ─────────────────────
+async function _baseSaveNoteFromEditor() {
+  if (!db) return;
+  if (isNoteEmpty()) {
+    // Don't save empty — show a subtle warning via the dot
+    setAutosaveDot('unsaved');
+    updateAutosaveDotTitle();
+    return;
+  }
+  setAutosaveDot('saving');
+  try {
+    await doSaveNote();
+    isDirty = false;
+    clearTimeout(autosaveTimer);   // cancel any pending autosave
+    setAutosaveDot('saved');
+    setTimeout(() => { setAutosaveDot(''); updateAutosaveDotTitle(); }, 2500);
+    await renderNotesList();
+  } catch (e) {
+    setAutosaveDot('unsaved');
+    console.error('Save error:', e);
+  }
+}
+
+// ── New note ───────────────────────────────────────────
+function newNote() {
+  // Save dirty non-empty note before discarding
+  if (isDirty && !isNoteEmpty()) {
+    if (!confirm('Save current note before creating a new one?')) {
+      // Discard without saving
+      _clearEditor();
+      return;
+    }
+    saveNoteFromEditor().then(() => _clearEditor());
+    return;
+  }
+  _clearEditor();
+}
+
+function _clearEditor() {
+  currentNoteId = null;          // detach from any saved note
+  editor.value  = '';
+  titleEl.value = '';
+  isDirty       = false;
+  clearTimeout(autosaveTimer);
+  setAutosaveDot('');
+  render();
+  renderNotesList();
+  closeNotes();
+  editor.focus();
+}
+
+// ── Load (open a saved note) ───────────────────────────
+async function loadNote(id) {
+  if (!db) return;
+
+  // If editing a dirty non-empty note, prompt before discarding changes
+  if (isDirty && !isNoteEmpty() && currentNoteId !== id) {
+    if (!confirm('You have unsaved changes. Discard and open this note?')) return;
+  }
+
+  const note = await dbGet(id);
+  if (!note) return;
+
+  currentNoteId = note.id;                                // restore stable UUID
+  titleEl.value = note.title === 'Untitled' ? '' : note.title;
+  editor.value  = note.body;
+  isDirty       = false;
+  clearTimeout(autosaveTimer);
+  setAutosaveDot('saved');
+  setTimeout(() => { setAutosaveDot(''); updateAutosaveDotTitle(); }, 1800);
+  render();
+  renderNotesList();
+  closeNotes();
+  editor.focus();
+}
+
+// ── Delete ─────────────────────────────────────────────
+async function _baseDeleteNote(id, e) {
+  e.stopPropagation();
+  const note = await dbGet(id);
+  const name = note ? `"${note.title}"` : 'this note';
+  if (!confirm(`Delete ${name}? This cannot be undone.`)) return;
+  await dbDelete(id);
+  if (currentNoteId === id) {
+    // The open note was deleted — clear editor and detach
+    currentNoteId = null;
+    editor.value  = '';
+    titleEl.value = '';
+    isDirty       = false;
+    clearTimeout(autosaveTimer);
+    setAutosaveDot('');
+    render();
+  }
+  await renderNotesList();
+  await refreshNotesBadge();
+}
+
+async function _baseDeleteAllNotes() {
+  if (!confirm('Delete ALL notes? This cannot be undone.')) return;
+  await dbClear();
+  currentNoteId = null;
+  await renderNotesList();
+  await refreshNotesBadge();
+}
+
+// ── Render notes list ─────────────────────────────────
+async function renderNotesList() {
+  if (!db) return;
+  const list  = document.getElementById('notesList');
+  const count = document.getElementById('notesCount');
+  const q     = (document.getElementById('notesSearch')?.value || '').toLowerCase().trim();
+  let notes   = await dbGetAll();
+
+  if (q) notes = notes.filter(n => n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q));
+
+  const total = (await dbGetAll()).length;
+  count.textContent = `${total} note${total !== 1 ? 's' : ''}`;
+
+  if (notes.length === 0) {
+    list.innerHTML = `<div class="notes-empty"><div class="notes-empty-icon">📄</div>${q ? 'No notes match your search.' : 'No notes yet.<br>Save your current document to get started.'}</div>`;
+    return;
+  }
+
+  list.innerHTML = notes.map(n => {
+    const active  = n.id === currentNoteId ? ' active' : '';
+    const preview = n.body.replace(/[#*`>\-\[\]]/g, '').trim().slice(0, 80).replace(/\n+/g, ' ');
+    const date    = formatNoteDate(n.updatedAt);
+    const words   = n.wordCount || 0;
+    return `<div class="note-item${active}" onclick="loadNote('${n.id}')">
+      <div class="note-item-body">
+        <div class="note-item-title">${escHtml(n.title)}</div>
+        <div class="note-item-preview">${escHtml(preview) || '—'}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0">
+        <div class="note-item-meta">${date}</div>
+        <div class="note-item-meta">${words}w</div>
+        <button class="note-item-del" onclick="deleteNote('${n.id}', event)" title="Delete">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 4h10M6 2h4M7 7v5M9 7v5M4 4l.8 10h6.4L12 4"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function formatNoteDate(ts) {
+  const d    = new Date(ts);
+  const now  = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (d.getFullYear() === now.getFullYear())
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { year: '2-digit', month: 'short', day: 'numeric' });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function refreshNotesBadge() {
+  const notes  = await dbGetAll();
+  const badge  = document.getElementById('notesBadge');
+  if (!badge) return;
+  if (notes.length > 0) {
+    badge.textContent = notes.length > 99 ? '99+' : notes.length;
+    badge.style.display = 'flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ── Sidebar open/close ─────────────────────────────────
+function openNotes() {
+  document.getElementById('notesOverlay').classList.add('open');
+  renderNotesList();
+  setTimeout(() => document.getElementById('notesSearch')?.focus(), 180);
+}
+function closeNotes() {
+  document.getElementById('notesOverlay').classList.remove('open');
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNotes();
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+    e.preventDefault();
+    saveNoteFromEditor();
+  }
+});
+
+// ── Init DB ────────────────────────────────────────────
+openDB().then(async () => {
+  await refreshNotesBadge();
+  // Load the most recently updated note on startup (if any)
+  const notes = await dbGetAll();
+  if (notes.length > 0 && !editor.value.trim()) {
+    const latest = notes[0];
+    currentNoteId = latest.id;
+    titleEl.value = latest.title === 'Untitled' ? '' : latest.title;
+    editor.value  = latest.body;
+    render();
+    setAutosaveDot('saved');
+    setTimeout(() => setAutosaveDot(''), 2000);
+  }
+}).catch(e => console.warn('IndexedDB not available:', e));
+
+// Hook autosave into editor changes
+// We will add markDirty calls after editor/title listeners are set up below
+
+const editor   = document.getElementById('editor');
+const output   = document.getElementById('output');
+const empty    = document.getElementById('emptyState');
+const titleEl  = document.getElementById('titleInput');
+let previewVisible = true;
+let modalMode = '';
+let savedSel  = { start: 0, end: 0 };
+let footnoteCount = 0;
+
+marked.setOptions({ breaks: true, gfm: true });
+
+// ── Render ──────────────────────────────────────────────────────
+function render() {
+  const raw = editor.value.trim();
+  if (!raw) {
+    output.innerHTML = '';
+    empty.style.display = 'flex';
+    updateStats(0, 0, 0);
+    return;
+  }
+  empty.style.display = 'none';
+  output.innerHTML = marked.parse(editor.value);
+
+  output.querySelectorAll('pre code').forEach(block => {
+    hljs.highlightElement(block);
+    const pre = block.parentElement;
+    if (pre.querySelector('.copy-code')) return;
+    const lang = (block.className.match(/language-(\w+)/)||[])[1] || '';
+    const btn = document.createElement('button');
+    btn.className = 'copy-code';
+    btn.textContent = lang ? `${lang} · copy` : 'copy';
+    btn.onclick = () => {
+      navigator.clipboard.writeText(block.innerText);
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = lang ? `${lang} · copy` : 'copy'; }, 1800);
+    };
+    pre.appendChild(btn);
+  });
+
+  const words = raw.split(/\s+/).filter(Boolean).length;
+  updateStats(words, editor.value.length, editor.value.split('\n').length);
+}
+
+function updateStats(w, c, l) {
+  document.getElementById('stat-words').textContent = `${w} word${w!==1?'s':''}`;
+  document.getElementById('stat-chars').textContent = `${c} char${c!==1?'s':''}`;
+  document.getElementById('stat-lines').textContent = `${l} line${l!==1?'s':''}`;
+}
+
+editor.addEventListener('input', () => {
+  autoRemoveOrphanedFootnotes();
+  render();
+  markDirty();
+});
+
+// ── Auto-remove footnote definitions when their inline ref is deleted ──────
+function autoRemoveOrphanedFootnotes() {
+  const val = editor.value;
+
+  // Find all inline refs like [^1] that are NOT followed by ':'
+  // (the colon distinguishes definitions [^1]: from inline refs [^1])
+  const inlineRefs = new Set();
+  const inlineRegex = /\[\^(\d+)\](?!:)/g;
+  let m;
+  while ((m = inlineRegex.exec(val)) !== null) {
+    inlineRefs.add(parseInt(m[1], 10));
+  }
+
+  // Find all definition lines like [^1]: some text
+  const defRegex = /\n?\n?\[\^(\d+)\]:[^\n]*/g;
+  let newVal = val;
+  let changed = false;
+
+  // Collect definitions whose inline ref is gone
+  const defsToRemove = [];
+  let dm;
+  const defScan = /\n?\n?\[\^(\d+)\]:[^\n]*/g;
+  while ((dm = defScan.exec(val)) !== null) {
+    const num = parseInt(dm[1], 10);
+    if (!inlineRefs.has(num)) {
+      defsToRemove.push(dm[0]);
+    }
+  }
+
+  if (defsToRemove.length === 0) return;
+
+  // Snapshot ONCE before making any removal (so undo works)
+  snapshot();
+
+  // Remove each orphaned definition
+  for (const def of defsToRemove) {
+    newVal = newVal.replace(def, '');
+    changed = true;
+  }
+
+  if (changed) {
+    // Preserve cursor position
+    const selS = editor.selectionStart;
+    const selE = editor.selectionEnd;
+    // Figure out how many chars were removed before cursor
+    let removedBefore = 0;
+    for (const def of defsToRemove) {
+      const defIdx = val.indexOf(def);
+      if (defIdx < selS) removedBefore += def.length;
+    }
+    editor.value = newVal;
+    editor.selectionStart = Math.max(0, selS - removedBefore);
+    editor.selectionEnd   = Math.max(0, selE - removedBefore);
+  }
+}
+titleEl.addEventListener('input', () => { render(); markDirty(); });
+
+editor.addEventListener('keyup', updateCursor);
+editor.addEventListener('click', updateCursor);
+function updateCursor() {
+  const txt = editor.value.substr(0, editor.selectionStart);
+  const lines = txt.split('\n');
+  document.getElementById('stat-cursor').textContent =
+    `Ln ${lines.length}, Col ${lines[lines.length-1].length + 1}`;
+}
+
+// ════════════════════════════════════════════════════════
+//  Custom undo/redo stack (setRangeText bypasses browser undo)
+// ════════════════════════════════════════════════════════
+const UNDO_STACK = [];
+const REDO_STACK = [];
+const MAX_HISTORY = 200;
+let _suppressSnapshot = false;
+
+function snapshot() {
+  // Called BEFORE any programmatic edit to save current state
+  if (_suppressSnapshot) return;
+  const state = {
+    value: editor.value,
+    selS: editor.selectionStart,
+    selE: editor.selectionEnd,
+  };
+  // Don't push duplicate of last state
+  if (UNDO_STACK.length > 0) {
+    const last = UNDO_STACK[UNDO_STACK.length - 1];
+    if (last.value === state.value) return;
+  }
+  UNDO_STACK.push(state);
+  if (UNDO_STACK.length > MAX_HISTORY) UNDO_STACK.shift();
+  REDO_STACK.length = 0; // clear redo on new edit
+}
+
+function editorUndo() {
+  if (UNDO_STACK.length === 0) return;
+  // Save current state to redo stack
+  REDO_STACK.push({
+    value: editor.value,
+    selS: editor.selectionStart,
+    selE: editor.selectionEnd,
+  });
+  const prev = UNDO_STACK.pop();
+  _suppressSnapshot = true;
+  editor.value = prev.value;
+  editor.selectionStart = prev.selS;
+  editor.selectionEnd   = prev.selE;
+  _suppressSnapshot = false;
+  render(); markDirty();
+}
+
+function editorRedo() {
+  if (REDO_STACK.length === 0) return;
+  UNDO_STACK.push({
+    value: editor.value,
+    selS: editor.selectionStart,
+    selE: editor.selectionEnd,
+  });
+  const next = REDO_STACK.pop();
+  _suppressSnapshot = true;
+  editor.value = next.value;
+  editor.selectionStart = next.selS;
+  editor.selectionEnd   = next.selE;
+  _suppressSnapshot = false;
+  render(); markDirty();
+}
+
+// Also snapshot on regular typing (throttled) so Ctrl+Z works for typed text too
+let _typingTimer = null;
+editor.addEventListener('keydown', e => {
+  // Snapshot before typing keystrokes (not modifiers/arrows)
+  const isTyping = !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1;
+  const isDelete = e.key === 'Backspace' || e.key === 'Delete';
+  if (isTyping || isDelete) {
+    clearTimeout(_typingTimer);
+    _typingTimer = setTimeout(snapshot, 600); // snapshot after 600ms idle
+  }
+});
+
+// ── Keyboard shortcuts ────────────────────────────────────────
+editor.addEventListener('keydown', e => {
+
+  // ── Tab: indent selected lines (or insert 2 spaces at cursor) ──
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    if (e.shiftKey) {
+      outdentLine();
+    } else {
+      indentLine();
+    }
+    return;
+  }
+
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key === 'b') { e.preventDefault(); wrapSel('**','**'); return; }
+  if (mod && e.key === 'i') { e.preventDefault(); wrapSel('*','*'); return; }
+  if (mod && e.key === 'k') { e.preventDefault(); openModal('link'); return; }
+  if (mod && e.shiftKey && e.key === 'F') { e.preventDefault(); formatMarkdown(); return; }
+  if (mod && e.key === 's') { e.preventDefault(); saveNoteFromEditor(); return; }
+  // ── Undo / Redo ──
+  if (mod && !e.shiftKey && e.key === 'z') { e.preventDefault(); editorUndo(); return; }
+  if (mod && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); editorRedo(); return; }
+
+  // ── Enter: smart list continuation ──
+  if (e.key === 'Enter' && !e.shiftKey && !mod) {
+    const s   = editor.selectionStart;
+    const val = editor.value;
+
+    // Get current line (from start of line up to cursor)
+    const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+    const lineText  = val.slice(lineStart, s);
+
+    // Match bullet list:  "- ", "* ", "+ ", and task variants "- [ ] " / "- [x] "
+    const bulletMatch  = lineText.match(/^(\s*)([-*+] \[[ xX]\] |[-*+] )(.*)$/);
+    // Match ordered list: "1. ", "12. " etc.
+    const orderedMatch = lineText.match(/^(\s*)(\d+)\. (.*)$/);
+
+    if (bulletMatch) {
+      snapshot();
+      const indent  = bulletMatch[1];
+      const marker  = bulletMatch[2];
+      const content = bulletMatch[3];
+      e.preventDefault();
+
+      if (content === '') {
+        // Empty list item → exit: remove the prefix, leave a plain newline
+        editor.setRangeText('', lineStart, s);
+        editor.selectionStart = editor.selectionEnd = lineStart;
+      } else {
+        // Continue list; if task checkbox, carry forward unchecked marker
+        const nextMarker = marker.replace(/\[[ xX]\] /, '[ ] ');
+        const insert = '\n' + indent + nextMarker;
+        editor.setRangeText(insert, s, s);
+        editor.selectionStart = editor.selectionEnd = s + insert.length;
+      }
+      render(); markDirty();
+      return;
+    }
+
+    if (orderedMatch) {
+      snapshot();
+      const indent  = orderedMatch[1];
+      const num     = parseInt(orderedMatch[2], 10);
+      const content = orderedMatch[3];
+      e.preventDefault();
+
+      if (content === '') {
+        // Empty ordered item → exit list
+        editor.setRangeText('', lineStart, s);
+        editor.selectionStart = editor.selectionEnd = lineStart;
+      } else {
+        const insert = '\n' + indent + (num + 1) + '. ';
+        editor.setRangeText(insert, s, s);
+        editor.selectionStart = editor.selectionEnd = s + insert.length;
+      }
+      render(); markDirty();
+      return;
+    }
+  }
+});
+
+// ── Dropdown helpers ──────────────────────────────────────────
+function toggleDropdown(id) {
+  const el = document.getElementById(id);
+  const wasOpen = el.classList.contains('open');
+  closeDropdowns();
+  if (!wasOpen) el.classList.add('open');
+}
+function closeDropdowns() {
+  document.querySelectorAll('.tb-dropdown.open').forEach(d => d.classList.remove('open'));
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.tb-dropdown')) closeDropdowns();
+});
+
+// ── Toolbar helpers ───────────────────────────────────────────
+function wrapSel(before, after) {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e) || 'text';
+  editor.setRangeText(before + sel + after);
+  editor.selectionStart = s + before.length;
+  editor.selectionEnd   = e + before.length;
+  editor.focus(); render(); markDirty();
+}
+
+// ── Multi-line helpers ───────────────────────────────────────
+// Returns {lines, blockStart, blockEnd} covering all selected lines
+function getSelectedLines() {
+  const val   = editor.value;
+  const selS  = editor.selectionStart;
+  const selE  = editor.selectionEnd;
+  // Extend selS back to start of its line
+  const blockStart = val.lastIndexOf('\n', selS - 1) + 1;
+  // Extend selE forward to end of its line
+  let blockEnd = val.indexOf('\n', selE);
+  if (blockEnd === -1) blockEnd = val.length;
+  // If selE is exactly at the start of the next line (selection ends with \n),
+  // don't include that empty next line
+  if (selE > selS && val[selE - 1] === '\n') {
+    blockEnd = val.lastIndexOf('\n', selE - 1);
+    if (blockEnd < blockStart) blockEnd = val.indexOf('\n', selE);
+    if (blockEnd === -1) blockEnd = val.length;
+  }
+  const block = val.slice(blockStart, blockEnd);
+  const lines = block.split('\n');
+  return { lines, blockStart, blockEnd, selS, selE };
+}
+
+function insertLinePrefix(prefix) {
+  snapshot();
+  const { lines, blockStart, blockEnd, selS, selE } = getSelectedLines();
+  const isSingleCursor = selS === selE;
+
+  // Detect list type patterns to handle toggling cleanly
+  // For ordered lists we strip any "N. " prefix, for others we match exactly
+  const isOrdered = prefix === '1. ';
+
+  // Check if ALL non-empty lines already have the prefix (or ordered prefix)
+  const nonEmpty = lines.filter(l => l.trim() !== '');
+  const allHave  = nonEmpty.every(l => {
+    if (isOrdered) return /^\s*\d+\.\s/.test(l);
+    return l.startsWith(prefix);
+  });
+
+  let newLines;
+  if (allHave) {
+    // Toggle OFF — remove prefix from every line
+    newLines = lines.map(l => {
+      if (l.trim() === '') return l;
+      if (isOrdered) return l.replace(/^(\s*)\d+\.\s/, '$1');
+      if (l.startsWith(prefix)) return l.slice(prefix.length);
+      return l;
+    });
+  } else {
+    // Toggle ON — add prefix to every line that doesn't already have it
+    let counter = 0;
+    newLines = lines.map(l => {
+      if (l.trim() === '') return l;
+      if (isOrdered) {
+        counter++;
+        // Remove any existing list marker first, then add ordered
+        const stripped = l.replace(/^(\s*)[-*+]\s(\[[ xX]\]\s)?/, '$1')
+                          .replace(/^(\s*)\d+\.\s/, '$1');
+        return stripped.replace(/^(\s*)/, `$1${counter}. `);
+      }
+      // Remove any conflicting list prefix first
+      const stripped = l.replace(/^(\s*)[-*+]\s(\[[ xX]\]\s)?/, '$1')
+                        .replace(/^(\s*)\d+\.\s/, '$1');
+      if (stripped.startsWith(prefix)) return stripped; // already has exact prefix
+      return prefix + stripped;
+    });
+  }
+
+  const newBlock = newLines.join('\n');
+  editor.setRangeText(newBlock, blockStart, blockEnd);
+
+  // Restore selection spanning the whole replaced block
+  if (isSingleCursor) {
+    editor.selectionStart = editor.selectionEnd = blockStart + newBlock.length;
+  } else {
+    editor.selectionStart = blockStart;
+    editor.selectionEnd   = blockStart + newBlock.length;
+  }
+  editor.focus(); render(); markDirty();
+}
+
+function insertHeading(n) {
+  snapshot();
+  const hashes = '#'.repeat(n) + ' ';
+  const val    = editor.value;
+  const s      = editor.selectionStart;
+  const lineStart = val.lastIndexOf('\n', s - 1) + 1;
+  const lineEnd   = (() => { const i = val.indexOf('\n', s); return i === -1 ? val.length : i; })();
+  const line      = val.slice(lineStart, lineEnd);
+  // Strip existing heading
+  const stripped  = line.replace(/^#{1,6}\s/, '');
+  const already   = stripped === line.replace(/^#{1,6}\s/, '') && line.startsWith(hashes);
+  const newLine   = already ? stripped : (hashes + stripped.replace(/^#+\s?/, ''));
+  editor.setRangeText(newLine, lineStart, lineEnd);
+  editor.selectionStart = editor.selectionEnd = lineStart + newLine.length;
+  editor.focus(); render(); markDirty();
+}
+
+function indentLine() {
+  snapshot();
+  const { lines, blockStart, blockEnd, selS, selE } = getSelectedLines();
+  const isSingleCursor = selS === selE;
+  const newLines = lines.map(l => '  ' + l);
+  const newBlock = newLines.join('\n');
+  editor.setRangeText(newBlock, blockStart, blockEnd);
+  if (isSingleCursor) {
+    editor.selectionStart = editor.selectionEnd = Math.min(selS + 2, blockStart + newBlock.length);
+  } else {
+    editor.selectionStart = blockStart;
+    editor.selectionEnd   = blockStart + newBlock.length;
+  }
+  editor.focus(); render(); markDirty();
+}
+
+function outdentLine() {
+  snapshot();
+  const { lines, blockStart, blockEnd, selS, selE } = getSelectedLines();
+  const isSingleCursor = selS === selE;
+  const newLines = lines.map(l => {
+    if (l.startsWith('  '))  return l.slice(2);
+    if (l.startsWith('\t')) return l.slice(1);
+    if (l.startsWith(' '))   return l.slice(1);
+    return l;
+  });
+  const newBlock = newLines.join('\n');
+  const removedFromFirst = lines[0].length - newLines[0].length;
+  editor.setRangeText(newBlock, blockStart, blockEnd);
+  if (isSingleCursor) {
+    editor.selectionStart = editor.selectionEnd = Math.max(blockStart, selS - removedFromFirst);
+  } else {
+    editor.selectionStart = blockStart;
+    editor.selectionEnd   = blockStart + newBlock.length;
+  }
+  editor.focus(); render(); markDirty();
+}
+
+function insertCodeBlock(lang) {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e);
+  const block = `\`\`\`${lang}\n${sel || 'your code here'}\n\`\`\``;
+  editor.setRangeText(block, s, e);
+  const inner = sel || 'your code here';
+  editor.selectionStart = s + 3 + lang.length + 1;
+  editor.selectionEnd   = s + 3 + lang.length + 1 + inner.length;
+  editor.focus(); render(); markDirty();
+}
+
+function insertHR() {
+  snapshot();
+  const s = editor.selectionStart;
+  const needsNewline = s > 0 && editor.value[s-1] !== '\n';
+  const text = (needsNewline ? '\n' : '') + '\n---\n\n';
+  editor.setRangeText(text, s, s);
+  editor.selectionStart = editor.selectionEnd = s + text.length;
+  editor.focus(); render(); markDirty();
+}
+
+function insertTable(cols, rows) {
+  snapshot();
+  const header = '| ' + Array(cols).fill('Column').map((c,i)=>c+' '+(i+1)).join(' | ') + ' |';
+  const sep    = '| ' + Array(cols).fill('----------').join(' | ') + ' |';
+  const row    = '| ' + Array(cols).fill('Cell').join(' | ') + ' |';
+  const body   = Array(rows - 1).fill(row).join('\n');
+  const tbl = `\n${header}\n${sep}\n${body}\n\n`;
+  const s = editor.selectionStart;
+  editor.setRangeText(tbl, s, s);
+  editor.selectionStart = editor.selectionEnd = s + tbl.length;
+  editor.focus(); render(); markDirty();
+}
+
+function getNextFootnoteNum() {
+  // Find the lowest positive integer NOT already used as a footnote in the editor.
+  // This means: delete [^2] from [^1][^2][^3] → next insert gives [^2] (fills the gap),
+  // and delete [^3] from [^1][^2][^3] → next insert gives [^3] (reuses the freed number).
+  const matches = editor.value.match(/\[\^(\d+)\]/g) || [];
+  const used = new Set(matches.map(m => parseInt(m.replace(/\D/g, ''), 10)));
+  let n = 1;
+  while (used.has(n)) n++;
+  return n;
+}
+
+function insertFootnote() {
+  snapshot();
+  footnoteCount = getNextFootnoteNum();
+  const num    = footnoteCount;
+  const inline = `[^${num}]`;
+  const def    = `\n\n[^${num}]: Footnote text here.`;
+
+  // Step 1: insert inline marker at cursor using setRangeText (preserves undo-friendly state)
+  const s = editor.selectionStart;
+  const e = editor.selectionEnd;
+  editor.setRangeText(inline, s, e, 'end');
+
+  // Step 2: append definition at the very end
+  const endPos = editor.value.length;
+  editor.setRangeText(def, endPos, endPos, 'end');
+
+  // Step 3: move cursor to just after the inline marker
+  editor.selectionStart = editor.selectionEnd = s + inline.length;
+
+  editor.focus(); render(); markDirty();
+}
+
+function insertDetails() {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e);
+  const block = `\n<details>\n<summary>Click to expand</summary>\n\n${sel || 'Hidden content here.'}\n\n</details>\n`;
+  editor.setRangeText(block, s, e);
+  editor.selectionStart = editor.selectionEnd = s + block.length;
+  editor.focus(); render(); markDirty();
+}
+
+// ── Modal ──────────────────────────────────────────────────────
+function openModal(mode) {
+  savedSel = { start: editor.selectionStart, end: editor.selectionEnd };
+  modalMode = mode;
+  const overlay = document.getElementById('modalOverlay');
+  document.getElementById('modalTitle').textContent = mode === 'link' ? 'Insert Link' : 'Insert Image';
+  const sel = editor.value.slice(savedSel.start, savedSel.end).replace(/"/g,'&quot;');
+  if (mode === 'link') {
+    document.getElementById('modalFields').innerHTML = `
+      <label>Link text</label><input id="mf1" value="${sel}" placeholder="Display text"/>
+      <label>URL</label><input id="mf2" placeholder="https://example.com"/>
+      <label>Title (optional)</label><input id="mf3" placeholder="Tooltip on hover"/>`;
+  } else {
+    document.getElementById('modalFields').innerHTML = `
+      <label>Alt text</label><input id="mf1" value="${sel}" placeholder="Image description"/>
+      <label>Image URL</label><input id="mf2" placeholder="https://example.com/image.png"/>
+      <label>Title (optional)</label><input id="mf3" placeholder="Tooltip on hover"/>`;
+  }
+  overlay.classList.add('open');
+  setTimeout(() => document.getElementById('mf2').focus(), 40);
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('open');
+  editor.focus();
+}
+function modalInsert() {
+  snapshot();
+  const f1 = (document.getElementById('mf1')?.value || '').trim();
+  const f2 = (document.getElementById('mf2')?.value || '').trim();
+  const f3 = (document.getElementById('mf3')?.value || '').trim();
+  let md = '';
+  if (modalMode === 'link') {
+    const text = f1 || f2 || 'link';
+    md = f3 ? `[${text}](${f2} "${f3}")` : `[${text}](${f2})`;
+  } else {
+    const alt = f1 || 'image';
+    md = f3 ? `![${alt}](${f2} "${f3}")` : `![${alt}](${f2})`;
+  }
+  editor.selectionStart = savedSel.start;
+  editor.selectionEnd   = savedSel.end;
+  editor.setRangeText(md);
+  editor.selectionStart = editor.selectionEnd = savedSel.start + md.length;
+  closeModal(); render(); markDirty();
+}
+document.getElementById('modalOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('modalOverlay').addEventListener('keydown', e => {
+  if (e.key === 'Enter') modalInsert();
+  if (e.key === 'Escape') closeModal();
+});
+
+// ── Toggle word wrap ──────────────────────────────────────────
+let wordWrapOn = true;
+function toggleWordWrap() {
+  wordWrapOn = !wordWrapOn;
+  editor.classList.toggle('word-wrap', wordWrapOn);
+  document.getElementById('btnWordWrap').classList.toggle('active', wordWrapOn);
+}
+
+// ── Toggle preview ─────────────────────────────────────────────
+function togglePreview() {
+  // Only works on desktop — on mobile the tab switcher handles this
+  if (window.innerWidth <= 720) return;
+
+  previewVisible = !previewVisible;
+  const panel   = document.getElementById('panelPreview');
+  const resizer = document.getElementById('resizer');
+  const ep      = document.querySelector('.panel-editor');
+  const ws      = document.querySelector('.workspace');
+  const btn     = document.getElementById('btnTogglePreview');
+
+  if (!previewVisible) {
+    // Hiding preview: save current editor width, expand editor to 100%
+    ep._savedWidth = ep.style.width || '';
+    panel.style.display   = 'none';
+    resizer.style.display = 'none';
+    ep.style.width = '100%';
+    ep.style.flex  = 'none';
+    btn.classList.add('active');
+  } else {
+    // Showing preview: restore previous width or fall back to 50%
+    panel.style.display   = '';
+    resizer.style.display = '';
+    const savedW = ep._savedWidth;
+    if (savedW && savedW !== '100%') {
+      ep.style.width = savedW;
+    } else {
+      ep.style.width = (ws.offsetWidth / 2) + 'px';
+    }
+    ep.style.flex = 'none';
+    btn.classList.remove('active');
+  }
+}
+
+// ── File ops ──────────────────────────────────────────────────
+function clearAll() {
+  if (editor.value.trim() && !confirm('Clear all content?')) return;
+  currentNoteId = null;
+  editor.value  = '';
+  titleEl.value = '';
+  footnoteCount = 0;
+  isDirty       = false;
+  setAutosaveDot('');
+  render();
+  editor.focus();
+}
+
+function copyHTML() {
+  if (!output.innerHTML) return;
+  navigator.clipboard.writeText(output.innerHTML).then(() => {
+    const btn = document.querySelector('.btn-copy');
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ Copied';
+    setTimeout(() => btn.innerHTML = orig, 1800);
+  });
+}
+
+function saveFile() {
+  const title    = titleEl.value.trim() || 'untitled';
+  const safe     = title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  const filename = (safe || 'untitled') + '.md';
+  const fm       = title ? `---\ntitle: ${title}\n---\n\n` : '';
+  const blob     = new Blob([fm + editor.value], { type: 'text/markdown' });
+  const a        = document.createElement('a');
+  a.href         = URL.createObjectURL(blob);
+  a.download     = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('fileInput').addEventListener('change', function() {
+  const file = this.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    let content = e.target.result;
+    const fm = content.match(/^---\s*\ntitle:\s*(.+)\n---\s*\n+/);
+    if (fm) {
+      titleEl.value = fm[1].trim();
+      content = content.replace(fm[0], '');
+    } else {
+      titleEl.value = file.name.replace(/\.(md|markdown|txt)$/i,'').replace(/[-_]/g,' ');
+    }
+    editor.value = content;
+    render(); editor.focus();
+  };
+  reader.readAsText(file);
+  this.value = '';
+});
+
+// ── Sample ────────────────────────────────────────────────────
+function loadSample() {
+  titleEl.value = 'MarkFlow Feature Demo';
+  editor.value =
+`# Welcome to MarkFlow ✦
+
+A **beautiful**, distraction-free Markdown editor with *live preview* and ~~syntax~~ highlighting.
+
+## Inline Formatting
+
+**Bold**, *italic*, ~~strikethrough~~, \`inline code\`, <u>underlined</u>, <mark>highlighted</mark>, X<sup>2</sup>, H<sub>2</sub>O.
+
+Press <kbd>Ctrl</kbd> + <kbd>B</kbd> for bold, <kbd>Ctrl</kbd> + <kbd>I</kbd> for italic, <kbd>Ctrl</kbd> + <kbd>K</kbd> for a link.
+
+## Lists
+
+- Unordered item
+- Another item
+  - Nested item
+
+1. First
+2. Second
+3. Third
+
+- [x] Completed task
+- [ ] Pending task
+- [ ] Another todo
+
+## Blockquote
+
+> *"The first draft of anything is garbage."*  
+> — Ernest Hemingway
+
+## Code
+
+Inline: \`const x = 42;\`
+
+\`\`\`javascript
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+console.log(fibonacci(10)); // 55
+\`\`\`
+
+\`\`\`python
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+print(greet("MarkFlow"))
+\`\`\`
+
+\`\`\`css
+.card {
+  background: #1e1810;
+  border-radius: 4px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 24px rgba(0,0,0,.3);
+}
+\`\`\`
+
+## Table
+
+| Feature          | Status | Notes              |
+|------------------|--------|--------------------|
+| Syntax Highlight | ✅     | Via highlight.js   |
+| Live Preview     | ✅     | Real-time          |
+| Save / Load .md  | ✅     | With frontmatter   |
+| Task Lists       | ✅     | GFM spec           |
+| Code Blocks      | ✅     | 18 languages       |
+
+## Collapsible
+
+<details>
+<summary>Click to expand</summary>
+
+This content is hidden by default. Great for FAQs or long content.
+
+</details>
+
+---
+
+[Visit Anthropic](https://anthropic.com "Anthropic AI") · [GFM Spec](https://github.github.com/gfm/)
+
+**Happy writing!** Use the toolbar or keyboard shortcuts.`;
+  render();
+}
+
+// ── Format Markdown ─────────────────────────────────────────
+function formatMarkdown() {
+  const raw = editor.value;
+  if (!raw.trim()) return;
+  const btn = document.getElementById('btnFormat');
+  btn.classList.add('format-loading');
+  btn.setAttribute('data-tip', 'Formatting\u2026');
+  try {
+    let formatted;
+    if (typeof prettier !== 'undefined' && typeof prettierPlugins !== 'undefined' && prettierPlugins.markdown) {
+      formatted = prettier.format(raw, {
+        parser: 'markdown',
+        plugins: [prettierPlugins.markdown],
+        proseWrap: 'preserve',
+        tabWidth: 2,
+        useTabs: false,
+      });
+    } else {
+      formatted = builtinFormatMarkdown(raw);
+    }
+    applyFormatted(raw, formatted, btn);
+  } catch (err) {
+    try {
+      applyFormatted(raw, builtinFormatMarkdown(raw), btn);
+    } catch (err2) {
+      btn.classList.remove('format-loading');
+      btn.setAttribute('data-tip', 'Format error');
+      setTimeout(() => btn.setAttribute('data-tip', 'Format Markdown  Ctrl+Shift+F'), 2500);
+    }
+  }
+}
+
+function applyFormatted(raw, formatted, btn) {
+  snapshot();
+  const cursorLine = raw.substr(0, editor.selectionStart).split('\n').length - 1;
+  editor.value = formatted;
+  const flines = formatted.split('\n');
+  let pos = 0;
+  for (let i = 0; i < Math.min(cursorLine, flines.length - 1); i++) pos += flines[i].length + 1;
+  editor.selectionStart = editor.selectionEnd = pos;
+  render();
+  btn.classList.remove('format-loading');
+  btn.classList.add('format-success');
+  btn.setAttribute('data-tip', 'Formatted \u2713');
+  setTimeout(() => {
+    btn.classList.remove('format-success');
+    btn.setAttribute('data-tip', 'Format Markdown  Ctrl+Shift+F');
+  }, 1400);
+  markDirty();
+}
+
+// ── Built-in Markdown formatter ───────────────────────────────
+function builtinFormatMarkdown(text) {
+  const lines = text.split('\n');
+  const out   = [];
+  let i = 0;
+  let prevBlank = false;
+  let inFence   = false;
+  let fenceChar = '';
+  let olCounters = {};
+
+  while (i < lines.length) {
+    const raw = lines[i];
+
+    // Fenced code block pass-through
+    const fenceM = raw.match(/^(`{3,}|~{3,})/);
+    if (fenceM && !inFence) { inFence = true; fenceChar = fenceM[1][0]; out.push(raw); i++; continue; }
+    if (inFence) {
+      const closeM = raw.match(/^(`{3,}|~{3,})/);
+      if (closeM && raw.trim()[0] === fenceChar) inFence = false;
+      out.push(raw); i++; continue;
+    }
+
+    const tr = raw.trim();
+
+    // Blank lines: collapse multiples
+    if (tr === '') {
+      if (!prevBlank && out.length > 0) { out.push(''); prevBlank = true; }
+      i++; continue;
+    }
+    prevBlank = false;
+
+    // ATX Headings
+    const hm = tr.match(/^(#{1,6})\s*(.+?)(\s+#+\s*)?$/);
+    if (hm) {
+      if (out.length > 0 && out[out.length-1] !== '') out.push('');
+      out.push(hm[1] + ' ' + hm[2].trim());
+      if (i+1 < lines.length && lines[i+1].trim() !== '') out.push('');
+      olCounters = {}; i++; continue;
+    }
+
+    // Horizontal rule
+    if (/^[-*_]{3,}\s*$/.test(tr)) {
+      if (out.length > 0 && out[out.length-1] !== '') out.push('');
+      out.push('---');
+      if (i+1 < lines.length && lines[i+1].trim() !== '') out.push('');
+      i++; continue;
+    }
+
+    // Unordered list — normalise * and + to -
+    const ulm = raw.match(/^(\s*)[*+-]\s+(.*)$/);
+    if (ulm) { out.push(ulm[1] + '- ' + ulm[2]); i++; continue; }
+
+    // Ordered list — re-number
+    const olm = raw.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    if (olm) {
+      const lvl = olm[1].length;
+      olCounters[lvl] = (olCounters[lvl] || 0) + 1;
+      Object.keys(olCounters).forEach(k => { if (Number(k) > lvl) delete olCounters[k]; });
+      out.push(olm[1] + olCounters[lvl] + '. ' + olm[3]);
+      i++; continue;
+    } else { olCounters = {}; }
+
+    // Blockquote — ensure space after >
+    const bqm = raw.match(/^(>+)([^>]*)$/);
+    if (bqm) {
+      out.push(bqm[1] + ' ' + bqm[2].trim());
+      i++; continue;
+    }
+
+    // Tables — align columns
+    if (tr.startsWith('|') && tr.endsWith('|')) {
+      const tbl = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) { tbl.push(lines[i]); i++; }
+      const rows = tbl.map(l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()));
+      const cols = Math.max(...rows.map(r => r.length));
+      rows.forEach(r => { while (r.length < cols) r.push(''); });
+      const widths = Array(cols).fill(3);
+      rows.forEach(r => r.forEach((c, ci) => { widths[ci] = Math.max(widths[ci], c.length || 3); }));
+      out.push(...rows.map((r, ri) => {
+        const cells = r.map((c, ci) => {
+          const isSep = /^:?-+:?$/.test(c);
+          if (isSep) {
+            const lc = c.startsWith(':'), rc = c.endsWith(':');
+            return (lc?':':'') + '-'.repeat(widths[ci]-(lc?1:0)-(rc?1:0)) + (rc?':':'');
+          }
+          return c.padEnd(widths[ci]);
+        });
+        return '| ' + cells.join(' | ') + ' |';
+      }));
+      continue;
+    }
+
+    // Default: trim trailing whitespace
+    out.push(raw.trimEnd());
+    i++;
+  }
+
+  while (out.length > 0 && out[out.length-1] === '') out.pop();
+  return out.join('\n') + '\n';
+}
+
+// ── Resizer ──────────────────────────────────────────────────
+(function() {
+  const resizer   = document.getElementById('resizer');
+  const editorPanel = document.querySelector('.panel-editor');
+  const ws        = document.querySelector('.workspace');
+  let isDragging  = false;
+  let startX      = 0;
+  let startWidth  = 0;
+
+  resizer.addEventListener('mousedown', e => {
+    isDragging = true;
+    startX     = e.clientX;
+    startWidth = editorPanel.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.style.cursor    = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const wsWidth  = ws.offsetWidth;
+    const resizerW = resizer.offsetWidth;
+    const minW     = 160;
+    const maxW     = wsWidth - resizerW - 160;
+    let newWidth   = startWidth + (e.clientX - startX);
+    newWidth       = Math.max(minW, Math.min(maxW, newWidth));
+    editorPanel.style.width = newWidth + 'px';
+    editorPanel.style.flex  = 'none';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor    = '';
+    document.body.style.userSelect = '';
+  });
+
+  // Touch support
+  resizer.addEventListener('touchstart', e => {
+    isDragging = true;
+    startX     = e.touches[0].clientX;
+    startWidth = editorPanel.offsetWidth;
+    resizer.classList.add('dragging');
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchmove', e => {
+    if (!isDragging) return;
+    const wsWidth  = ws.offsetWidth;
+    const resizerW = resizer.offsetWidth;
+    const minW     = 160;
+    const maxW     = wsWidth - resizerW - 160;
+    let newWidth   = startWidth + (e.touches[0].clientX - startX);
+    newWidth       = Math.max(minW, Math.min(maxW, newWidth));
+    editorPanel.style.width = newWidth + 'px';
+    editorPanel.style.flex  = 'none';
+  }, { passive: false });
+
+  document.addEventListener('touchend', () => {
+    isDragging = false;
+    resizer.classList.remove('dragging');
+  });
+
+  // Double-click to reset 50/50
+  resizer.addEventListener('dblclick', () => {
+    editorPanel.style.width = '';
+    editorPanel.style.flex  = '';
+  });
+
+  // Set initial width to 50%
+  function initWidth() {
+    editorPanel.style.width = (ws.offsetWidth / 2) + 'px';
+    editorPanel.style.flex  = 'none';
+  }
+  // Run after layout is ready
+  requestAnimationFrame(initWidth);
+})();
+
+// ── Mobile tab switching ─────────────────────────────────────
+let mobileActiveTab = 'editor';
+
+function isMobile() { return window.innerWidth <= 720; }
+
+function applyMobileLayout() {
+  if (!isMobile()) return;
+  const ws   = document.querySelector('.workspace');
+  const hdr  = document.querySelector('header');
+  const tabs = document.getElementById('mobileTabs');
+  const sb   = document.querySelector('.statusbar');
+  // Calculate available height
+  const used = hdr.offsetHeight + tabs.offsetHeight + sb.offsetHeight;
+  const avail = window.innerHeight - used;
+  ws.style.height = avail + 'px';
+  ws.style.flex   = 'none';
+}
+
+function switchMobileTab(tab) {
+  mobileActiveTab = tab;
+  const editorPanel  = document.querySelector('.panel-editor');
+  const previewPanel = document.getElementById('panelPreview');
+  const tabEd = document.getElementById('tabEditor');
+  const tabPr = document.getElementById('tabPreview');
+
+  if (tab === 'editor') {
+    editorPanel.classList.remove('mobile-hidden');
+    previewPanel.classList.add('mobile-hidden');
+    tabEd.classList.add('active');
+    tabPr.classList.remove('active');
+    // Small delay so layout settles before focus
+    setTimeout(() => editor.focus(), 50);
+  } else {
+    editorPanel.classList.add('mobile-hidden');
+    previewPanel.classList.remove('mobile-hidden');
+    tabEd.classList.remove('active');
+    tabPr.classList.add('active');
+  }
+}
+
+function initMobile() {
+  if (!isMobile()) return;
+  // Hide preview by default, show editor
+  const previewPanel = document.getElementById('panelPreview');
+  const editorPanel  = document.querySelector('.panel-editor');
+  previewPanel.classList.add('mobile-hidden');
+  editorPanel.classList.remove('mobile-hidden');
+  document.getElementById('tabEditor').classList.add('active');
+  document.getElementById('tabPreview').classList.remove('active');
+  applyMobileLayout();
+}
+
+function resetDesktopLayout() {
+  if (isMobile()) return;
+  const ws           = document.querySelector('.workspace');
+  const previewPanel = document.getElementById('panelPreview');
+  const editorPanel  = document.querySelector('.panel-editor');
+  ws.style.height = '';
+  ws.style.flex   = '';
+  previewPanel.classList.remove('mobile-hidden');
+  editorPanel.classList.remove('mobile-hidden');
+}
+
+window.addEventListener('resize', () => {
+  if (isMobile()) {
+    applyMobileLayout();
+  } else {
+    resetDesktopLayout();
+  }
+});
+window.addEventListener('orientationchange', () => {
+  setTimeout(() => { applyMobileLayout(); }, 150);
+});
+
+// ── Init ─────────────────────────────────────────────────────
+editor.classList.add('word-wrap'); // word wrap on by default
+loadSample();
+// Initialize mobile layout after DOM is painted
+requestAnimationFrame(() => {
+  initMobile();
+  applyAutosaveSettingsToUI();
+  initDrive();
+});
+
+
+
+// ════════════════════════════════════════════════════════════════════
+//  MARKFLOW — GOOGLE DRIVE SYNC ENGINE  (v2 — clean rewrite)
+//
+//  Architecture
+//  ────────────
+//  • Every note lives in IndexedDB (offline-first truth).
+//  • Each note is mirrored as  "<uuid>.json"  in Drive's appDataFolder
+//    (private to this app; not visible in the user's Drive UI).
+//  • A single "markflow_index.json" file on Drive holds a lightweight
+//    index  { [noteId]: updatedAt }  so we can skip downloading files
+//    that haven't changed — no wasted API calls.
+//  • Deletions are tracked via "markflow_tombstones.json" on Drive:
+//    { [noteId]: deletedAt }.  A note whose tombstone timestamp is
+//    ≥ its content's updatedAt is treated as permanently deleted.
+//  • Sync is bidirectional and idempotent.  Running it twice has the
+//    same result as running it once.
+//
+//  Conflict resolution (last-write-wins per note)
+//  ───────────────────────────────────────────────
+//  For each note, we compare local.updatedAt vs drive.updatedAt.
+//  The higher timestamp wins.  Ties keep local (no write needed).
+//  Tombstones always beat content if  tombstone.deletedAt > content.updatedAt.
+//
+//  Sync trigger schedule
+//  ─────────────────────
+//  • On sign-in (after token obtained)
+//  • 3 s after coming back online
+//  • 4 s after every manual or auto save
+//  • Manual "Sync" button in the notes sidebar
+//  • On page load if a valid token is found in sessionStorage
+// ════════════════════════════════════════════════════════════════════
+
+// ── Configuration ─────────────────────────────────────────────────
+const DRIVE_CLIENT_ID   = '151717170283-ljhlt8p5ni3258gkvt6u0p1k3c8qf3ol.apps.googleusercontent.com';  // ← paste your Google OAuth 2.0 Client ID here
+const DRIVE_SCOPE       = 'https://www.googleapis.com/auth/drive.appdata openid email profile';
+const APP_FOLDER        = 'appDataFolder';
+const INDEX_FILENAME    = 'markflow_index.json';
+const TOMBSTONE_FNAME   = 'markflow_tombstones.json';
+const SYNC_MAP_LSKEY    = 'mf_sync_map';      // localStorage: { [noteId]: driveFileId }
+const TOKEN_SSKEY       = 'mf_drive_token';   // sessionStorage: { token, expires }
+const TOMB_LSKEY        = 'mf_local_tombs';   // localStorage: pending local tombstones
+
+// ── Runtime state ──────────────────────────────────────────────────
+let gdToken     = null;   // current OAuth access token string
+let gdUser      = null;   // { name, email, picture }
+let gdSyncing   = false;
+let gdPending   = false;  // queued sync while one is running
+let gdTimer     = null;
+let gdOnline    = navigator.onLine;
+
+// ── Network status ─────────────────────────────────────────────────
+window.addEventListener('online',  () => {
+  gdOnline = true;
+  refreshOfflineBadge();
+  if (gdToken) scheduleSync(3000);
+});
+window.addEventListener('offline', () => {
+  gdOnline = false;
+  refreshOfflineBadge();
+});
+
+function refreshOfflineBadge() {
+  const b = document.getElementById('driveOfflineBadge');
+  if (b) b.classList.toggle('show', !gdOnline);
+}
+
+// ── Token helpers ──────────────────────────────────────────────────
+// We persist both the token AND the user profile so that on page reload
+// we never need to call /userinfo with a potentially stale token.
+function tokenLoad() {
+  try {
+    const t = JSON.parse(sessionStorage.getItem(TOKEN_SSKEY) || 'null');
+    // Require at least 2 minutes remaining so we don't start with a near-dead token
+    if (t && t.expires > Date.now() + 120000) {
+      if (t.user) gdUser = t.user;   // restore cached user profile
+      return t.token;
+    }
+  } catch {}
+  return null;
+}
+function tokenSave(token, expiresIn, user) {
+  try {
+    sessionStorage.setItem(TOKEN_SSKEY, JSON.stringify({
+      token,
+      expires: Date.now() + (expiresIn - 60) * 1000,
+      user:    user || gdUser || null,
+    }));
+  } catch {}
+}
+function tokenClear() {
+  gdToken = null; gdUser = null;
+  try { sessionStorage.removeItem(TOKEN_SSKEY); } catch {}
+}
+
+// ── Sync map (noteId → driveFileId) ───────────────────────────────
+function syncMapLoad()       { try { return JSON.parse(localStorage.getItem(SYNC_MAP_LSKEY) || '{}'); } catch { return {}; } }
+function syncMapSave(m)      { try { localStorage.setItem(SYNC_MAP_LSKEY, JSON.stringify(m)); } catch {} }
+
+// ── Local tombstones (pending deletions not yet pushed) ───────────
+function localTombsLoad()    { try { return JSON.parse(localStorage.getItem(TOMB_LSKEY) || '{}'); } catch { return {}; } }
+function localTombsSave(t)   { try { localStorage.setItem(TOMB_LSKEY, JSON.stringify(t)); } catch {} }
+
+// ── Google Identity Services ───────────────────────────────────────
+let _gisClient = null;
+
+function gisAvailable() {
+  return DRIVE_CLIENT_ID && typeof google !== 'undefined' && google?.accounts?.oauth2;
+}
+
+function gisInit() {
+  if (!gisAvailable()) return;
+  _gisClient = google.accounts.oauth2.initTokenClient({
+    client_id: DRIVE_CLIENT_ID,
+    scope:     DRIVE_SCOPE,
+    callback:  gisTokenCallback,
+  });
+  // Restore session token — tokenLoad() already restored gdUser from the stored session
+  const saved = tokenLoad();
+  if (saved) {
+    gdToken = saved;
+    if (gdUser) {
+      // User profile already restored from session — skip the /userinfo round-trip
+      updateDriveUI();
+      scheduleSync(1500);
+    } else {
+      // No cached user — fetch fresh (token was just restored so it is valid)
+      gdFetchUser().then(() => { updateDriveUI(); scheduleSync(1500); });
+    }
+  }
+}
+
+function gisTokenCallback(resp) {
+  if (resp.error) { console.error('[Drive] token error:', resp.error); return; }
+  gdToken = resp.access_token;
+
+  // Try to get user profile from the response itself (when openid scope is granted,
+  // GIS sometimes returns id_token or the userinfo can be decoded from tokeninfo).
+  // We use tokeninfo (not userinfo) — tokeninfo accepts access tokens directly.
+  gdFetchUser().then(() => {
+    tokenSave(gdToken, resp.expires_in || 3600, gdUser);
+    updateDriveUI();
+    scheduleSync(500);
+  });
+}
+
+// Decode user info using tokeninfo — works with any access token regardless of scope.
+// Unlike /userinfo, /tokeninfo validates the access token and returns basic profile
+// fields without requiring the openid scope to be active.
+async function gdFetchUser() {
+  if (!gdToken) return;
+  try {
+    // tokeninfo accepts the raw access_token as a query param — no Bearer header needed
+    const r = await fetch(
+      `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(gdToken)}`
+    );
+    if (r.ok) {
+      const u = await r.json();
+      // tokeninfo returns: email, name (if openid scope), sub, aud, exp, etc.
+      const email = u.email || '';
+      const name  = u.name || u.email || 'Google User';
+      // picture is not in tokeninfo — try to get it from the People API using the token
+      // but only if we don't already have it cached
+      let picture = (gdUser && gdUser.picture) || '';
+      if (!picture && email) {
+        try {
+          const p = await fetch(
+            'https://people.googleapis.com/v1/people/me?personFields=photos',
+            { headers: { Authorization: `Bearer ${gdToken}` } }
+          );
+          if (p.ok) {
+            const pd = await p.json();
+            picture = pd?.photos?.[0]?.url || '';
+          }
+        } catch {}
+      }
+      gdUser = { name, email, picture };
+    } else if (r.status === 400 || r.status === 401) {
+      // Token is invalid or expired
+      console.warn('[Drive] tokeninfo returned', r.status, '— token is invalid');
+      tokenClear();
+      updateDriveUI();
+      setSyncStatus('Session expired — please sign in again', 'error');
+    }
+  } catch (e) {
+    // Network failure — non-fatal, sync still works, just no user display
+    console.warn('[Drive] gdFetchUser failed (non-fatal):', e.message);
+  }
+}
+
+// Public: sign in
+function driveSignIn() {
+  if (!gisAvailable()) {
+    alert('Google API not loaded yet, or no Client ID is configured.\n\nTo enable Google Drive sync, open the HTML file and paste your Google OAuth 2.0 Client ID into the DRIVE_CLIENT_ID constant near the bottom of the script.');
+    return;
+  }
+  _gisClient.requestAccessToken({ prompt: '' });
+}
+
+// Public: sign out
+function driveSignOut() {
+  if (gdToken) { try { google.accounts.oauth2.revoke(gdToken); } catch {} }
+  tokenClear();
+  updateDriveUI();
+  setSyncStatus('Signed out', '');
+}
+
+// ── Drive UI ──────────────────────────────────────────────────────
+function updateDriveUI() {
+  const signBtn  = document.getElementById('driveSignBtn');
+  const syncRow  = document.getElementById('driveSyncRow');
+  const nameEl   = document.getElementById('driveUserName');
+  const emailEl  = document.getElementById('driveUserEmail');
+  const subEl    = document.getElementById('notesHeaderSub');
+
+  if (gdToken && gdUser) {
+    nameEl.textContent  = gdUser.name  || 'Google User';
+    emailEl.textContent = gdUser.email || '';
+    // Swap placeholder for real avatar once
+    const placeholder = document.getElementById('driveAvatar');
+    if (placeholder && gdUser.picture && placeholder.tagName !== 'IMG') {
+      const img = document.createElement('img');
+      img.id        = 'driveAvatar';
+      img.className = 'drive-avatar';
+      img.src       = gdUser.picture;
+      img.alt       = '';
+      placeholder.replaceWith(img);
+    }
+    signBtn.textContent = 'Sign out';
+    signBtn.className   = 'drive-sign-btn drive-btn-signout';
+    signBtn.onclick     = driveSignOut;
+    syncRow.style.display = '';
+    if (subEl) subEl.textContent = 'IndexedDB + Google Drive';
+  } else {
+    nameEl.textContent  = 'Not signed in';
+    emailEl.textContent = 'Sign in to enable cloud sync';
+    const img = document.getElementById('driveAvatar');
+    if (img && img.tagName === 'IMG') {
+      const ph = document.createElement('div');
+      ph.id        = 'driveAvatar';
+      ph.className = 'drive-avatar-placeholder';
+      ph.textContent = '☁';
+      img.replaceWith(ph);
+    }
+    signBtn.textContent = 'Sign in';
+    signBtn.className   = 'drive-sign-btn drive-btn-signin';
+    signBtn.onclick     = driveSignIn;
+    syncRow.style.display = 'none';
+    if (subEl) subEl.textContent = 'Saved in browser · works offline';
+    refreshOfflineBadge();
+  }
+}
+
+function setSyncStatus(msg, cls = '') {
+  const el  = document.getElementById('driveSyncStatus');
+  const btn = document.getElementById('driveSyncBtn');
+  if (!el) return;
+  el.textContent = msg;
+  el.className   = 'drive-sync-status' + (cls ? ' ' + cls : '');
+  if (btn) {
+    btn.disabled = (cls === 'syncing');
+    btn.classList.toggle('syncing', cls === 'syncing');
+  }
+}
+
+function scheduleSync(ms = 6000) {
+  clearTimeout(gdTimer);
+  gdTimer = setTimeout(driveSync, ms);
+}
+
+// ── Drive HTTP layer ───────────────────────────────────────────────
+async function gdFetch(url, opts = {}) {
+  if (!gdToken) throw new Error('NOT_AUTHED');
+  // Clone headers so we never mutate the caller's opts object
+  opts = { ...opts, headers: { Authorization: `Bearer ${gdToken}`, ...(opts.headers || {}) } };
+  let r;
+  try {
+    r = await fetch(url, opts);
+  } catch (netErr) {
+    // Network failure (offline, DNS, etc.) — not a token issue
+    throw new Error('NETWORK_ERR');
+  }
+  if (r.status === 401) {
+    // Token was revoked or expired between sessions — clear and tell the user
+    console.warn('[Drive] 401 on', url, '— clearing token');
+    tokenClear();
+    updateDriveUI();
+    setSyncStatus('Session expired — please sign in again', 'error');
+    throw new Error('TOKEN_EXPIRED');
+  }
+  // 403 = scopes revoked or quota; 429 = rate limit — both should surface
+  if (r.status === 403) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`FORBIDDEN: ${body.slice(0, 120)}`);
+  }
+  // 404 is normal (file not found) — callers handle it; don't throw
+  if (!r.ok && r.status !== 404 && r.status !== 204) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`HTTP_${r.status}: ${body.slice(0, 120)}`);
+  }
+  return r;
+}
+
+// List all files in appDataFolder
+async function gdListFiles() {
+  const r = await gdFetch(
+    'https://www.googleapis.com/drive/v3/files' +
+    '?spaces=appDataFolder&fields=files(id,name,modifiedTime)&pageSize=1000'
+  );
+  const j = await r.json();
+  console.log('[Drive] listed', j.files?.length ?? 0, 'files');
+  return j.files || [];
+}
+
+// Download JSON content of a Drive file by its file ID
+async function gdDownload(fileId) {
+  console.log('[Drive] downloading', fileId);
+  const r = await gdFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+  if (r.status === 404) return null;
+  try {
+    const data = await r.json();
+    console.log('[Drive] downloaded ok', fileId);
+    return data;
+  } catch { return null; }
+}
+
+// Create a new file in appDataFolder (metadata only, no content yet)
+async function gdCreateFile(filename) {
+  console.log('[Drive] creating file:', filename);
+  const r = await gdFetch(
+    'https://www.googleapis.com/drive/v3/files?fields=id,name',
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name: filename, parents: [APP_FOLDER] }),
+    }
+  );
+  const j = await r.json();
+  console.log('[Drive] created file id:', j.id);
+  return j.id;  // returns the new file's Drive ID
+}
+
+// Upload (overwrite) content of an existing Drive file
+async function gdUploadContent(fileId, payload) {
+  console.log('[Drive] uploading content to', fileId);
+  const r = await gdFetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id`,
+    {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    }
+  );
+  const j = await r.json();
+  console.log('[Drive] upload ok, id:', j.id);
+  return j.id || fileId;
+}
+
+// Upsert: if existingFileId provided → upload content; else create then upload.
+async function gdUpsert(filename, payload, existingFileId = null) {
+  let fileId = existingFileId;
+  if (!fileId) {
+    fileId = await gdCreateFile(filename);
+  }
+  await gdUploadContent(fileId, payload);
+  return { id: fileId, name: filename };
+}
+
+// Permanently delete a Drive file (no trash)
+async function gdDelete(fileId) {
+  try {
+    const r = await gdFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}`,
+      { method: 'DELETE' }
+    );
+    console.log('[Drive] deleted', fileId, 'status', r.status);
+    return r.status === 204 || r.status === 404;
+  } catch { return false; }
+}
+
+// ── Index file helpers ─────────────────────────────────────────────
+// The index is  { meta: { indexId }, notes: { [noteId]: updatedAt }, version: 1 }
+// Stored on Drive as INDEX_FILENAME.
+
+let _indexFileId = null;
+
+async function gdLoadIndex(fileMap) {
+  const f = fileMap[INDEX_FILENAME];
+  if (!f) return {};
+  _indexFileId = f.id;
+  const data = await gdDownload(f.id);
+  return (data && data.notes) ? data.notes : {};  // { [noteId]: updatedAt }
+}
+
+// One-time cleanup: remove duplicate index / tombstone files left by old buggy runs.
+// Drive allows multiple files with the same name in appDataFolder, so this can happen.
+async function gdDedupeSystemFiles(allDriveFiles) {
+  for (const fname of [INDEX_FILENAME, TOMBSTONE_FNAME]) {
+    const dupes = allDriveFiles
+      .filter(f => f.name === fname)
+      .sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+    if (dupes.length <= 1) continue;
+    // Keep the newest (index 0), delete the rest
+    for (const stale of dupes.slice(1)) {
+      await gdDelete(stale.id).catch(() => {});
+      console.log('[Drive] removed duplicate', fname, stale.id);
+    }
+    // Update cached ID to the newest file
+    if (fname === INDEX_FILENAME)  _indexFileId = dupes[0].id;
+    if (fname === TOMBSTONE_FNAME) _tombFileId  = dupes[0].id;
+  }
+}
+
+async function gdSaveIndex(notesIndex, fileMap) {
+  // Prefer module-level cached ID (set from any previous upsert this session)
+  // over stale fileMap which was built before the index file may have been created.
+  const fid = _indexFileId || fileMap[INDEX_FILENAME]?.id || null;
+  const result = await gdUpsert(INDEX_FILENAME, { version: 1, notes: notesIndex }, fid);
+  _indexFileId = result.id || fid;   // cache for next call
+}
+
+// ── Tombstone helpers ──────────────────────────────────────────────
+let _tombFileId = null;
+
+async function gdLoadTombstones(fileMap) {
+  // Merge Drive tombstones with pending local tombstones
+  const local = localTombsLoad();
+  const f = fileMap[TOMBSTONE_FNAME];
+  if (!f) return { ...local };
+  _tombFileId = f.id;
+  const remote = await gdDownload(f.id);
+  if (!remote) return { ...local };
+  // Merge: keep the latest deletedAt per noteId
+  const merged = { ...remote };
+  for (const [k, v] of Object.entries(local)) {
+    if (!merged[k] || v > merged[k]) merged[k] = v;
+  }
+  return merged;
+}
+
+async function gdSaveTombstones(tombs, fileMap) {
+  const fid = _tombFileId || fileMap[TOMBSTONE_FNAME]?.id || null;
+  const result = await gdUpsert(TOMBSTONE_FNAME, tombs, fid);
+  _tombFileId = result.id || fid;
+  localTombsSave({});  // clear local pending tombstones now committed to Drive
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  MAIN SYNC ROUTINE
+//  Returns { pulled, pushed, deleted } counts
+// ══════════════════════════════════════════════════════════════════
+async function driveSync() {
+  if (!gdToken || !db) return;
+  if (!gdOnline) { setSyncStatus('Offline — will sync when online', 'offline'); return; }
+  if (gdSyncing) { gdPending = true; return; }
+
+  gdSyncing = true;
+  setSyncStatus('Syncing…', 'syncing');
+
+  const stats = { pulled: 0, pushed: 0, deleted: 0 };
+
+  try {
+    console.log('[Drive] ── sync start ──');
+
+    // ── Phase 0: load Drive file list once (minimise API calls) ────
+    const driveFiles = await gdListFiles();
+    const fileMap = {};
+    for (const f of driveFiles) fileMap[f.name] = f;
+    console.log('[Drive] fileMap keys:', Object.keys(fileMap));
+
+    // ── Phase 0b: clean up duplicate system files from old buggy runs ──
+    await gdDedupeSystemFiles(driveFiles);
+
+    // ── Phase 1: load index and tombstones ──────────────────────────
+    const driveIndex  = await gdLoadIndex(fileMap);
+    const tombstones  = await gdLoadTombstones(fileMap);
+    console.log('[Drive] driveIndex notes:', Object.keys(driveIndex).length, 'tombstones:', Object.keys(tombstones).length);
+
+    // ── Phase 2: load all local notes ──────────────────────────────
+    const localNotes = await dbGetAll();
+    const localIndex = {};
+    for (const n of localNotes) localIndex[n.id] = n.updatedAt;
+    console.log('[Drive] local notes:', localNotes.length);
+
+    const syncMap = syncMapLoad();
+    console.log('[Drive] syncMap entries:', Object.keys(syncMap).length);
+    let indexChanged    = false;
+    let tombstonesChanged = false;
+
+    // ── Phase 3: pull (Drive → local) ──────────────────────────────
+    for (const [noteId, driveUpdatedAt] of Object.entries(driveIndex)) {
+      // Skip system files
+      if (noteId === INDEX_FILENAME || noteId === TOMBSTONE_FNAME) continue;
+
+      // Is this note tombstoned? (deleted)
+      const tombAt = tombstones[noteId];
+      if (tombAt && tombAt >= driveUpdatedAt) {
+        // Our tombstone is >= content timestamp → note is deleted, skip pull
+        continue;
+      }
+
+      const localUpdatedAt = localIndex[noteId];
+
+      // Skip if local is same age or newer
+      if (localUpdatedAt && localUpdatedAt >= driveUpdatedAt) continue;
+
+      // We need to download this note
+      const driveFileId = syncMap[noteId] || fileMap[`${noteId}.json`]?.id;
+      if (!driveFileId) continue;
+
+      let remoteNote;
+      try { remoteNote = await gdDownload(driveFileId); } catch { continue; }
+      if (!remoteNote || !remoteNote.id || !remoteNote.updatedAt) continue;
+
+      // Final conflict check after download (race protection)
+      const currentLocal = await dbGet(noteId).catch(() => null);
+      if (currentLocal && currentLocal.updatedAt >= remoteNote.updatedAt) continue;
+
+      // Write to IndexedDB
+      await dbPut(remoteNote);
+      syncMap[noteId] = driveFileId;
+      stats.pulled++;
+
+      // If this is the currently open note, refresh editor
+      if (currentNoteId === noteId && !isDirty) {
+        titleEl.value = remoteNote.title === 'Untitled' ? '' : remoteNote.title;
+        editor.value  = remoteNote.body;
+        render();
+      }
+    }
+
+    // ── Phase 4: push (local → Drive) ──────────────────────────────
+    const freshLocalNotes = await dbGetAll();
+    const newDriveIndex   = { ...driveIndex };
+
+    for (const note of freshLocalNotes) {
+      // Never push tombstoned notes
+      const tombAt = tombstones[note.id];
+      if (tombAt && tombAt >= note.updatedAt) {
+        // Local copy is stale relative to tombstone — delete it locally too
+        if (localIndex[note.id]) {
+          await dbDelete(note.id).catch(() => {});
+          stats.deleted++;
+        }
+        continue;
+      }
+
+      const driveUpdatedAt = driveIndex[note.id];
+
+      // Skip if Drive has same or newer version
+      if (driveUpdatedAt && driveUpdatedAt >= note.updatedAt) {
+        // Ensure syncMap is up to date
+        if (!syncMap[note.id]) syncMap[note.id] = fileMap[`${note.id}.json`]?.id || null;
+        continue;
+      }
+
+      // Push note to Drive
+      const existingFileId = syncMap[note.id] || fileMap[`${note.id}.json`]?.id || null;
+      console.log('[Drive] pushing note', note.id, 'title:', note.title, 'existingFileId:', existingFileId);
+      try {
+        const result = await gdUpsert(`${note.id}.json`, note, existingFileId);
+        syncMap[note.id]       = result.id || existingFileId;
+        newDriveIndex[note.id] = note.updatedAt;
+        indexChanged = true;
+        stats.pushed++;
+        console.log('[Drive] pushed ok, driveId:', result.id);
+      } catch (e) {
+        console.error('[Drive] push FAILED for', note.id, e.message);
+      }
+    }
+
+    // ── Phase 5: propagate deletions to Drive ──────────────────────
+    for (const [noteId, deletedAt] of Object.entries(tombstones)) {
+      const driveFileId = syncMap[noteId] || fileMap[`${noteId}.json`]?.id;
+      if (driveFileId) {
+        await gdDelete(driveFileId);
+        delete syncMap[noteId];
+        stats.deleted++;
+      }
+      // Remove from Drive index
+      if (newDriveIndex[noteId]) {
+        delete newDriveIndex[noteId];
+        indexChanged = true;
+      }
+      // Also clean up any local residue
+      const residue = await dbGet(noteId).catch(() => null);
+      if (residue) await dbDelete(noteId).catch(() => {});
+    }
+
+    // ── Phase 6: save updated index to Drive ──────────────────────────
+    console.log('[Drive] indexChanged:', indexChanged, 'newDriveIndex notes:', Object.keys(newDriveIndex).length);
+    if (indexChanged) {
+      try {
+        await gdSaveIndex(newDriveIndex, fileMap);
+        console.log('[Drive] index saved, _indexFileId:', _indexFileId);
+      } catch(e) {
+        console.error('[Drive] index save FAILED:', e.message);
+      }
+    }
+
+    // ── Phase 6b: push tombstones if any pending ────────────────────
+    // Check BEFORE the save, not after (save clears localTombs)
+    const pendingTombs = localTombsLoad();
+    if (Object.keys(pendingTombs).length > 0) {
+      try {
+        await gdSaveTombstones(tombstones, fileMap);
+      } catch(e) {
+        console.warn('[Drive] tombstone save failed:', e.message);
+      }
+    }
+
+    // ── Phase 7: persist sync map ───────────────────────────────────
+    syncMapSave(syncMap);
+
+    // ── Phase 8: refresh UI ─────────────────────────────────────────
+    if (stats.pulled > 0 || stats.deleted > 0) {
+      await renderNotesList();
+      await refreshNotesBadge();
+    }
+
+    const total = stats.pulled + stats.pushed + stats.deleted;
+    const ts    = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const msg   = total > 0
+      ? `Synced at ${ts} (↓${stats.pulled} ↑${stats.pushed} ✕${stats.deleted})`
+      : `Synced at ${ts} · up to date`;
+    setSyncStatus(msg, 'synced');
+    setTimeout(() => setSyncStatus('Ready', ''), 5000);
+
+  } catch (err) {
+    console.error('[Drive] sync error:', err);
+    if (err.message === 'TOKEN_EXPIRED' || err.message === 'NOT_AUTHED') {
+      setSyncStatus('Auth expired — please sign in again', 'error');
+      tokenClear(); updateDriveUI();
+    } else if (!gdOnline) {
+      setSyncStatus('Offline — changes saved locally', 'offline');
+    } else {
+      setSyncStatus('Sync error — will retry', 'error');
+      scheduleSync(30000); // retry in 30 s
+    }
+  } finally {
+    gdSyncing = false;
+    if (gdPending) { gdPending = false; scheduleSync(2000); }
+  }
+}
+
+// ── Hook into saveNoteFromEditor — schedule Drive push after save ──
+const __origSaveNoteFromEditor = _baseSaveNoteFromEditor;
+async function saveNoteFromEditor() {
+  await __origSaveNoteFromEditor();
+  if (gdToken && gdOnline) scheduleSync(4000);
+}
+
+// ── Hook into doAutosave — schedule Drive push after autosave ─────
+const __origDoAutosave = _baseDoAutosave;
+async function doAutosave() {
+  await __origDoAutosave();
+  if (gdToken && gdOnline) scheduleSync(4000);
+}
+
+// ── Hook into deleteNote — record tombstone before deletion ───────
+const __origDeleteNote = _baseDeleteNote;
+async function deleteNote(id, e) {
+  // Record a local tombstone before deleting from IndexedDB
+  const tombs = localTombsLoad();
+  tombs[id]   = Date.now();
+  localTombsSave(tombs);
+  await __origDeleteNote(id, e);
+  if (gdToken && gdOnline) scheduleSync(2000);
+}
+
+// ── Hook into deleteAllNotes — tombstone all notes ─────────────────
+const __origDeleteAllNotes = _baseDeleteAllNotes;
+async function deleteAllNotes() {
+  // Tombstone every local note before wiping IndexedDB
+  const notes = await dbGetAll();
+  const tombs = localTombsLoad();
+  const now   = Date.now();
+  for (const n of notes) tombs[n.id] = now;
+  localTombsSave(tombs);
+  await __origDeleteAllNotes();
+  if (gdToken && gdOnline) scheduleSync(2000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+function initDrive() {
+  updateDriveUI();
+  refreshOfflineBadge();
+  if (!DRIVE_CLIENT_ID) return; // no client ID configured — skip silently
+  // GIS loads async; poll until available
+  if (gisAvailable()) {
+    gisInit();
+  } else {
+    let n = 0;
+    const poll = setInterval(() => {
+      if (gisAvailable()) { clearInterval(poll); gisInit(); }
+      else if (++n > 30)  { clearInterval(poll); }
+    }, 500);
+  }
+}
+
+</script>
+</body>
+</html>
