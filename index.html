@@ -12,6 +12,15 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=IBM+Plex+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <!-- KaTeX for LaTeX rendering -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script>
+    // Promise that resolves as soon as katex.min.js has executed
+    let _katexResolve;
+    window.katexReady = new Promise(function(res){ _katexResolve = res; });
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"
+          onload="_katexResolve()"></script>
   <style>
     :root {
       --ink: #1a1208;
@@ -116,6 +125,9 @@
     .btn-save:hover { background: #225736; }
     .btn-copy { background: var(--accent); color: #fff; border-color: var(--accent); }
     .btn-copy:hover { background: #a13224; }
+    .btn-print { background: #4a3f8a; color: #fff; border-color: #4a3f8a; }
+    .btn-print:hover { background: #362d66; }
+    .btn-print.printing { opacity: 0.65; pointer-events: none; }
     .hdr-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.1); margin: 0 0.1rem; }
     #fileInput { display: none; }
 
@@ -447,6 +459,19 @@
     .md-body td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); }
     .md-body tr:hover td { background: var(--cream); }
     .md-body img { max-width: 100%; border-radius: 2px; border: 1px solid var(--border); margin: 0.8rem 0; }
+
+    /* ── KaTeX / LaTeX styles ── */
+    .md-body .katex-display {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 1rem 1.4rem;
+      margin: 1.4rem 0;
+      background: var(--cream);
+      border-left: 3px solid var(--gold);
+      border-radius: 0 3px 3px 0;
+    }
+    .md-body .katex { font-size: 1.05em; }
+    .md-body .katex-display > .katex { font-size: 1.15em; }
 
     /* ── Status Bar ── */
     .statusbar {
@@ -1184,6 +1209,308 @@
     /* fade-in */
     @keyframes fadeUp { from { opacity:0; transform:translateY(4px);} to{opacity:1;transform:translateY(0);}}
     .md-body > * { animation: fadeUp 0.2s ease both; }
+
+    /* ══════════════════════════════════════════
+       PRINT SETTINGS PANEL
+       ══════════════════════════════════════════ */
+    .print-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.72);
+      z-index: 1100;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .print-overlay.open { display: flex; }
+
+    .print-panel {
+      background: #13100a;
+      border: 1px solid rgba(255,255,255,0.13);
+      border-radius: 6px;
+      width: min(680px, calc(100vw - 2rem));
+      height: min(86vh, 780px);
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 28px 80px rgba(0,0,0,0.8);
+      overflow: hidden;
+    }
+
+    .pp-header {
+      background: var(--editor-surface);
+      border-bottom: 2px solid var(--accent);
+      padding: 0.7rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-shrink: 0;
+      min-height: 0;
+    }
+    .pp-header-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--paper);
+      flex: 1;
+      white-space: nowrap;
+    }
+    .pp-header-sub {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.54rem;
+      letter-spacing: 0.09em;
+      color: rgba(245,240,232,0.28);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .pp-close {
+      background: transparent;
+      border: none;
+      color: rgba(245,240,232,0.4);
+      cursor: pointer;
+      padding: 5px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.12s;
+    }
+    .pp-close:hover { color: var(--paper); background: rgba(255,255,255,0.09); }
+    .pp-close svg { width: 15px; height: 15px; }
+
+    /* Scrollable grid body */
+    .pp-body {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 0.8rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.7rem;
+      min-height: 0;
+    }
+    .pp-body::-webkit-scrollbar { width: 4px; }
+    .pp-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .pp-section {
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 4px;
+      padding: 0.6rem 0.75rem;
+      min-width: 0;
+    }
+    .pp-section.full { grid-column: 1 / -1; }
+
+    .pp-section-title {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.55rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.55rem;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .pp-section-title svg { width: 10px; height: 10px; opacity: 0.8; flex-shrink: 0; }
+
+    .pp-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.42rem;
+      min-width: 0;
+    }
+    .pp-row:last-child { margin-bottom: 0; }
+
+    .pp-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.62rem;
+      color: rgba(245,240,232,0.52);
+      min-width: 80px;
+      flex-shrink: 0;
+    }
+    .pp-label.wide { min-width: 100px; }
+
+    .pp-input {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 3px;
+      color: var(--paper);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.68rem;
+      padding: 0.26rem 0.45rem;
+      outline: none;
+      transition: border-color 0.13s;
+      flex: 1;
+      min-width: 0;
+    }
+    .pp-input:focus { border-color: rgba(192,57,43,0.55); }
+    .pp-input[type=number] { width: 58px; flex: none; }
+    .pp-input[type=color]  { width: 34px; height: 26px; padding: 2px 3px; cursor: pointer; flex: none; }
+
+    .pp-select {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 3px;
+      color: var(--paper);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.65rem;
+      padding: 0.26rem 0.45rem;
+      outline: none;
+      cursor: pointer;
+      flex: 1;
+      min-width: 0;
+      transition: border-color 0.13s;
+    }
+    .pp-select:focus { border-color: rgba(192,57,43,0.55); }
+    .pp-select option { background: #13100a; }
+
+    .pp-unit {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.57rem;
+      color: rgba(245,240,232,0.26);
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+
+    /* Toggle switch */
+    .pp-toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+    .pp-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .pp-track {
+      position: absolute; inset: 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 9px;
+      cursor: pointer;
+      transition: background 0.18s;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .pp-track::after {
+      content: '';
+      position: absolute;
+      top: 2px; left: 2px;
+      width: 12px; height: 12px;
+      background: rgba(245,240,232,0.38);
+      border-radius: 50%;
+      transition: transform 0.18s, background 0.18s;
+    }
+    .pp-toggle input:checked + .pp-track { background: var(--accent2); border-color: var(--accent2); }
+    .pp-toggle input:checked + .pp-track::after { transform: translateX(14px); background: #fff; }
+
+    /* Format buttons (B / I / U) */
+    .pp-fmt-btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.66rem;
+      padding: 2px 8px;
+      border: 1px solid rgba(255,255,255,0.13);
+      border-radius: 3px;
+      cursor: pointer;
+      background: transparent;
+      color: rgba(245,240,232,0.48);
+      transition: all 0.12s;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .pp-fmt-btn.on { background: rgba(192,57,43,0.25); border-color: rgba(192,57,43,0.5); color: var(--paper); }
+    .pp-fmt-btn[data-fmt=bold]      { font-weight: 700; }
+    .pp-fmt-btn[data-fmt=italic]    { font-style: italic; }
+    .pp-fmt-btn[data-fmt=underline] { text-decoration: underline; }
+
+    /* Page-number position 3×2 grid */
+    .pp-pos-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 3px;
+    }
+    .pp-pos-btn {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.56rem;
+      padding: 3px 2px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 3px;
+      cursor: pointer;
+      background: transparent;
+      color: rgba(245,240,232,0.38);
+      text-align: center;
+      transition: all 0.12s;
+      white-space: nowrap;
+    }
+    .pp-pos-btn.sel { background: rgba(192,57,43,0.25); border-color: rgba(192,57,43,0.5); color: var(--paper); }
+
+    /* Custom page size row */
+    .pp-custom-size {
+      display: none;
+      gap: 0.35rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 0.35rem;
+    }
+    .pp-custom-size.show { display: flex; }
+
+    /* Footer */
+    .pp-footer {
+      background: var(--editor-surface);
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding: 0.6rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
+    .pp-footer-tip {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.56rem;
+      color: rgba(245,240,232,0.22);
+      margin-right: auto;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pp-btn-cancel {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: transparent;
+      color: rgba(245,240,232,0.42);
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 2px;
+      padding: 0.36rem 0.9rem;
+      cursor: pointer;
+      transition: all 0.13s;
+      white-space: nowrap;
+    }
+    .pp-btn-cancel:hover { color: var(--paper); border-color: rgba(255,255,255,0.25); }
+    .pp-btn-print {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      background: #4a3f8a;
+      color: #fff;
+      border: 1px solid #4a3f8a;
+      border-radius: 2px;
+      padding: 0.36rem 1rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.13s;
+      white-space: nowrap;
+    }
+    .pp-btn-print:hover { background: #362d66; }
+    .pp-btn-print svg { width: 11px; height: 11px; flex-shrink: 0; }
+
+    /* Responsive: single column on narrow screens */
+    @media (max-width: 540px) {
+      .print-panel { height: 92vh; }
+      .pp-body { grid-template-columns: 1fr; }
+      .pp-section.full { grid-column: 1; }
+      .pp-header-sub { display: none; }
+      .pp-footer-tip { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -1224,6 +1551,10 @@
     <button class="btn btn-copy" onclick="copyHTML()">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="5" width="9" height="9" rx="1"/><path d="M2 11V2h9"/></svg>
       <span class="btn-label">Copy HTML</span>
+    </button>
+    <button class="btn btn-print" onclick="openPrintSettings()" id="btnPrint" title="Print / Export PDF">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="1" width="10" height="4" rx="0.5"/><rect x="1" y="5" width="14" height="8" rx="1"/><rect x="4" y="10" width="8" height="5" rx="0.5"/><circle cx="12" cy="8.5" r="0.8" fill="currentColor" stroke="none"/></svg>
+      <span class="btn-label">Print / PDF</span>
     </button>
   </div>
 </header>
@@ -1417,6 +1748,44 @@
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h8M2 6h12M2 9h6M2 12h10" stroke-linecap="round"/><path d="M12 10l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span style="font-size:0.62rem;letter-spacing:0.06em">Format</span>
       </button>
+
+      <div class="tb-sep"></div>
+
+      <!-- LaTeX dropdown -->
+      <div class="tb-dropdown" id="dd-latex">
+        <button class="tb-btn" data-tip="Insert LaTeX math" onclick="toggleDropdown('dd-latex')" style="font-family:'IBM Plex Mono',monospace;font-size:0.72rem;letter-spacing:0;font-style:italic">
+          ∑ <span class="tb-caret">▾</span>
+        </button>
+        <div class="tb-dropdown-menu">
+          <button class="tb-dd-item" onclick="insertLatexInline(); closeDropdowns()">
+            Inline math <span class="dd-hint">$…$</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexBlock(); closeDropdowns()">
+            Display math <span class="dd-hint">$$…$$</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\frac{a}{b}'); closeDropdowns()">
+            Fraction <span class="dd-hint">\frac{a}{b}</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\sqrt{x}'); closeDropdowns()">
+            Square root <span class="dd-hint">\sqrt{x}</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\sum_{i=1}^{n} x_i'); closeDropdowns()">
+            Summation <span class="dd-hint">\sum_{i}^{n}</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\int_{a}^{b} f(x)\\,dx'); closeDropdowns()">
+            Integral <span class="dd-hint">\int_a^b</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\lim_{x \\to \\infty}'); closeDropdowns()">
+            Limit <span class="dd-hint">\lim_{x→∞}</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}'); closeDropdowns()">
+            Matrix <span class="dd-hint">\begin{pmatrix}</span>
+          </button>
+          <button class="tb-dd-item" onclick="insertLatexSnippet('\\alpha, \\beta, \\gamma, \\delta, \\pi, \\theta, \\lambda, \\mu, \\sigma, \\omega'); closeDropdowns()">
+            Greek letters <span class="dd-hint">α β γ δ…</span>
+          </button>
+        </div>
+      </div>
 
     </div><!-- /toolbar -->
 
@@ -2021,6 +2390,49 @@ let footnoteCount = 0;
 
 marked.setOptions({ breaks: true, gfm: true });
 
+// ── LaTeX pre-processing: protect $...$ and $$...$$ from marked ──
+// We replace LaTeX blocks with placeholders before markdown parsing,
+// then restore them after so KaTeX can render them cleanly.
+function extractLatex(src) {
+  const blocks = [];
+  let out = src;
+
+  // Display math: $$...$$ (must come first to avoid conflict with inline)
+  out = out.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
+    const idx = blocks.length;
+    blocks.push({ type: 'display', math });
+    return `<latex-placeholder data-idx="${idx}"></latex-placeholder>`;
+  });
+
+  // Inline math: $...$ (single-line, non-greedy, not preceded/followed by $)
+  out = out.replace(/(?<!\$)\$(?!\$)((?:[^$\n]|\\.)+?)\$(?!\$)/g, (_, math) => {
+    const idx = blocks.length;
+    blocks.push({ type: 'inline', math });
+    return `<latex-placeholder data-idx="${idx}"></latex-placeholder>`;
+  });
+
+  return { out, blocks };
+}
+
+function restoreLatex(container, blocks) {
+  container.querySelectorAll('latex-placeholder').forEach(el => {
+    const idx = parseInt(el.getAttribute('data-idx'), 10);
+    const { type, math } = blocks[idx];
+    const span = document.createElement(type === 'display' ? 'div' : 'span');
+    try {
+      katex.render(math, span, {
+        displayMode: type === 'display',
+        throwOnError: false,
+        output: 'htmlAndMathml',
+      });
+    } catch (e) {
+      span.textContent = (type === 'display' ? '$$' : '$') + math + (type === 'display' ? '$$' : '$');
+      span.style.color = 'var(--accent)';
+    }
+    el.replaceWith(span);
+  });
+}
+
 // ── Render ──────────────────────────────────────────────────────
 function render() {
   const raw = editor.value.trim();
@@ -2031,7 +2443,42 @@ function render() {
     return;
   }
   empty.style.display = 'none';
-  output.innerHTML = marked.parse(editor.value);
+
+  // Extract LaTeX before markdown parsing
+  const { out: preprocessed, blocks } = extractLatex(editor.value);
+  output.innerHTML = marked.parse(preprocessed);
+
+  // Restore and render LaTeX with KaTeX (if loaded)
+  if (typeof katex !== 'undefined') {
+    restoreLatex(output, blocks);
+  } else {
+    // KaTeX not ready yet — re-render once it loads (handles first-load race)
+    window.katexReady.then(() => {
+      // Only re-render if the editor content hasn't changed
+      const reBlocks = [];
+      const reSrc = editor.value;
+      const { out: reParsed, blocks: reExtracted } = extractLatex(reSrc);
+      if (reSrc.trim()) {
+        output.innerHTML = marked.parse(reParsed);
+        restoreLatex(output, reExtracted);
+        output.querySelectorAll('pre code').forEach(block => {
+          hljs.highlightElement(block);
+          const pre = block.parentElement;
+          if (pre.querySelector('.copy-code')) return;
+          const lang = (block.className.match(/language-(\w+)/)||[])[1] || '';
+          const btn = document.createElement('button');
+          btn.className = 'copy-code';
+          btn.textContent = lang ? `${lang} · copy` : 'copy';
+          btn.onclick = () => {
+            navigator.clipboard.writeText(block.innerText);
+            btn.textContent = 'Copied ✓';
+            setTimeout(() => { btn.textContent = lang ? `${lang} · copy` : 'copy'; }, 1800);
+          };
+          pre.appendChild(btn);
+        });
+      }
+    });
+  }
 
   output.querySelectorAll('pre code').forEach(block => {
     hljs.highlightElement(block);
@@ -2523,6 +2970,42 @@ function insertDetails() {
   editor.focus(); render(); markDirty();
 }
 
+// ── LaTeX helpers ──────────────────────────────────────────────
+function insertLatexInline() {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e).trim();
+  const wrap = sel ? `$${sel}$` : '$  $';
+  editor.setRangeText(wrap, s, e);
+  // Place cursor inside the delimiters if nothing was selected
+  const cur = sel ? s + wrap.length : s + 2;
+  editor.selectionStart = editor.selectionEnd = cur;
+  editor.focus(); render(); markDirty();
+}
+
+function insertLatexBlock() {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e).trim();
+  const block = sel
+    ? `\n$$\n${sel}\n$$\n`
+    : `\n$$\n\n$$\n`;
+  editor.setRangeText(block, s, e);
+  // Place cursor inside the $$
+  const cur = sel ? s + block.length : s + 4; // after \n$$\n
+  editor.selectionStart = editor.selectionEnd = cur;
+  editor.focus(); render(); markDirty();
+}
+
+function insertLatexSnippet(snippet) {
+  snapshot();
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const block = `\n$$\n${snippet}\n$$\n`;
+  editor.setRangeText(block, s, e);
+  editor.selectionStart = editor.selectionEnd = s + block.length;
+  editor.focus(); render(); markDirty();
+}
+
 // ── Modal ──────────────────────────────────────────────────────
 function openModal(mode) {
   savedSel = { start: editor.selectionStart, end: editor.selectionEnd };
@@ -2641,6 +3124,8 @@ function copyHTML() {
   });
 }
 
+// ── Print / PDF — handled by Print Settings panel (openPrintSettings / executePrint) ──
+
 function saveFile() {
   const title    = titleEl.value.trim() || 'untitled';
   const safe     = title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
@@ -2752,6 +3237,26 @@ print(greet("MarkFlow"))
 This content is hidden by default. Great for FAQs or long content.
 
 </details>
+
+## LaTeX Math
+
+Inline math: Einstein's famous $E = mc^2$ equation, or the quadratic formula $x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$.
+
+Display math (block):
+
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}
+$$
+
+$$
+\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}
+$$
+
+A matrix example:
+
+$$
+\\mathbf{A} = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}, \\quad \\det(\\mathbf{A}) = ad - bc
+$$
 
 ---
 
@@ -3779,5 +4284,661 @@ function initDrive() {
 }
 
 </script>
+
+
+<!-- ══════════════════════════════════════
+     PRINT SETTINGS PANEL
+     ══════════════════════════════════════ -->
+<div class="print-overlay" id="printOverlay">
+  <div class="print-panel" role="dialog" aria-modal="true" aria-label="Print Settings">
+
+    <div class="pp-header">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" style="width:16px;height:16px;color:var(--accent)"><rect x="3" y="1" width="10" height="4" rx="0.5"/><rect x="1" y="5" width="14" height="8" rx="1"/><rect x="4" y="10" width="8" height="5" rx="0.5"/><circle cx="12" cy="8.5" r="0.8" fill="currentColor" stroke="none"/></svg>
+      <span class="pp-header-title">Print Settings</span>
+      <span class="pp-header-sub">Configure before printing / PDF export</span>
+      <button class="pp-close" onclick="closePrintSettings()" title="Close">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg>
+      </button>
+    </div>
+
+    <div class="pp-body">
+
+      <!-- Page Size & Orientation -->
+      <div class="pp-section">
+        <div class="pp-section-title">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="1" width="10" height="14" rx="1"/><line x1="5" y1="5" x2="11" y2="5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="11" x2="9" y2="11"/></svg>
+          Page Size &amp; Orientation
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Size</span>
+          <select class="pp-select" id="pp-pageSize" onchange="ppPageSizeChange()">
+            <optgroup label="ISO A Series">
+              <option value="A0">A0 (841 × 1189 mm)</option>
+              <option value="A1">A1 (594 × 841 mm)</option>
+              <option value="A2">A2 (420 × 594 mm)</option>
+              <option value="A3">A3 (297 × 420 mm)</option>
+              <option value="A4" selected>A4 (210 × 297 mm)</option>
+              <option value="A5">A5 (148 × 210 mm)</option>
+              <option value="A6">A6 (105 × 148 mm)</option>
+              <option value="A7">A7 (74 × 105 mm)</option>
+            </optgroup>
+            <optgroup label="ISO B Series">
+              <option value="B3">B3 (353 × 500 mm)</option>
+              <option value="B4">B4 (250 × 353 mm)</option>
+              <option value="B5">B5 (176 × 250 mm)</option>
+              <option value="B6">B6 (125 × 176 mm)</option>
+            </optgroup>
+            <optgroup label="North America">
+              <option value="letter">Letter (8.5 × 11 in)</option>
+              <option value="legal">Legal (8.5 × 14 in)</option>
+              <option value="tabloid">Tabloid (11 × 17 in)</option>
+              <option value="executive">Executive (7.25 × 10.5 in)</option>
+              <option value="ledger">Ledger (17 × 11 in)</option>
+              <option value="statement">Statement (5.5 × 8.5 in)</option>
+              <option value="folio">Folio (8.5 × 13 in)</option>
+            </optgroup>
+            <optgroup label="Japanese JIS">
+              <option value="JIS-B4">JIS B4 (257 × 364 mm)</option>
+              <option value="JIS-B5">JIS B5 (182 × 257 mm)</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="custom">⚙ Custom size…</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="pp-custom-size" id="pp-customSize">
+          <span class="pp-label">W</span>
+          <input class="pp-input" type="number" id="pp-custW" value="210" min="10" max="9999" style="width:62px;flex:none">
+          <span class="pp-label" style="min-width:auto">H</span>
+          <input class="pp-input" type="number" id="pp-custH" value="297" min="10" max="9999" style="width:62px;flex:none">
+          <select class="pp-select" id="pp-custUnit" style="width:64px;flex:none">
+            <option value="mm" selected>mm</option>
+            <option value="cm">cm</option>
+            <option value="in">in</option>
+            <option value="pt">pt</option>
+            <option value="px">px</option>
+            <option value="pc">pc</option>
+          </select>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Orientation</span>
+          <select class="pp-select" id="pp-orientation">
+            <option value="portrait">Portrait ↑ (tall)</option>
+            <option value="landscape">Landscape → (wide)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Margins -->
+      <div class="pp-section">
+        <div class="pp-section-title">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="1"/><rect x="4.5" y="4.5" width="7" height="7" rx="0.5" stroke-dasharray="2 1.2"/></svg>
+          Page Margins
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Unit</span>
+          <select class="pp-select" id="pp-marginUnit" onchange="ppMarginUnitChange()">
+            <option value="mm" selected>mm</option>
+            <option value="cm">cm</option>
+            <option value="in">in</option>
+            <option value="pt">pt</option>
+            <option value="px">px</option>
+            <option value="pc">pc</option>
+          </select>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Top</span>
+          <input class="pp-input" type="number" id="pp-mTop" value="18" min="0" max="500" step="0.5">
+          <span class="pp-unit" id="pp-mUnit1">mm</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Bottom</span>
+          <input class="pp-input" type="number" id="pp-mBottom" value="18" min="0" max="500" step="0.5">
+          <span class="pp-unit" id="pp-mUnit2">mm</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Left</span>
+          <input class="pp-input" type="number" id="pp-mLeft" value="20" min="0" max="500" step="0.5">
+          <span class="pp-unit" id="pp-mUnit3">mm</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Right</span>
+          <input class="pp-input" type="number" id="pp-mRight" value="20" min="0" max="500" step="0.5">
+          <span class="pp-unit" id="pp-mUnit4">mm</span>
+        </div>
+      </div>
+
+      <!-- Colours & Graphics -->
+      <div class="pp-section">
+        <div class="pp-section-title">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 010 12" fill="rgba(192,57,43,0.3)" stroke="none"/></svg>
+          Colours &amp; Graphics
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Backgrounds</span>
+          <label class="pp-toggle"><input type="checkbox" id="pp-printBg"><span class="pp-track"></span></label>
+          <span class="pp-unit" style="margin-left:6px">Print bg colours</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Code colours</span>
+          <label class="pp-toggle"><input type="checkbox" id="pp-printCode" checked><span class="pp-track"></span></label>
+          <span class="pp-unit" style="margin-left:6px">Syntax highlighting</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Images</span>
+          <label class="pp-toggle"><input type="checkbox" id="pp-printImages" checked><span class="pp-track"></span></label>
+          <span class="pp-unit" style="margin-left:6px">Show images</span>
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Links</span>
+          <select class="pp-select" id="pp-linkStyle">
+            <option value="color">Coloured (red)</option>
+            <option value="underline">Underline only (black)</option>
+            <option value="plain">Plain text</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Page Numbers -->
+      <div class="pp-section">
+        <div class="pp-section-title">
+          <svg viewBox="0 0 16 16" fill="currentColor"><text x="2" y="12" font-size="10" font-family="monospace">#</text></svg>
+          Page Numbers
+        </div>
+        <div class="pp-row">
+          <span class="pp-label">Enable</span>
+          <label class="pp-toggle"><input type="checkbox" id="pp-pageNum" checked onchange="ppTogglePageNum()"><span class="pp-track"></span></label>
+        </div>
+        <div id="pp-pageNumOpts">
+          <div class="pp-row">
+            <span class="pp-label">Format</span>
+            <input class="pp-input" type="text" id="pp-pageNumFmt" value="{PAGE} / {TOTAL}" placeholder="{PAGE} / {TOTAL}" style="font-family:'IBM Plex Mono',monospace;font-size:0.65rem">
+          </div>
+          <div class="pp-row" style="align-items:flex-start">
+            <span class="pp-label" style="padding-top:2px">Position</span>
+            <div class="pp-pos-grid" style="flex:1">
+              <button class="pp-pos-btn" data-pos="top-left"     onclick="ppSetPos(this)">↖ Top Left</button>
+              <button class="pp-pos-btn" data-pos="top-center"   onclick="ppSetPos(this)">↑ Top Ctr</button>
+              <button class="pp-pos-btn" data-pos="top-right"    onclick="ppSetPos(this)">↗ Top Right</button>
+              <button class="pp-pos-btn" data-pos="bottom-left"  onclick="ppSetPos(this)">↙ Bot Left</button>
+              <button class="pp-pos-btn sel" data-pos="bottom-center" onclick="ppSetPos(this)">↓ Bot Ctr</button>
+              <button class="pp-pos-btn" data-pos="bottom-right" onclick="ppSetPos(this)">↘ Bot Right</button>
+            </div>
+          </div>
+          <div class="pp-row">
+            <span class="pp-label">Colour</span>
+            <input class="pp-input" type="color" id="pp-pnColor" value="#7a6f5e">
+            <span class="pp-unit" style="margin-left:4px">Number colour</span>
+          </div>
+          <div class="pp-row">
+            <span class="pp-label">Font size</span>
+            <input class="pp-input" type="number" id="pp-pnSize" value="8" min="4" max="20" style="width:58px;flex:none">
+            <span class="pp-unit">pt</span>
+          </div>
+          <div class="pp-row">
+            <span class="pp-label">Style</span>
+            <div style="display:flex;gap:0.4rem">
+              <button class="pp-fmt-btn" data-fmt="bold"      onclick="ppToggleFmt(this)">B</button>
+              <button class="pp-fmt-btn" data-fmt="italic"    onclick="ppToggleFmt(this)">I</button>
+              <button class="pp-fmt-btn" data-fmt="underline" onclick="ppToggleFmt(this)">U</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Document Header -->
+      <div class="pp-section full">
+        <div class="pp-section-title">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="2" y1="4" x2="14" y2="4" stroke-linecap="round"/><line x1="2" y1="7" x2="10" y2="7" stroke-linecap="round"/></svg>
+          Document Header
+        </div>
+        <div style="display:flex;gap:2rem;flex-wrap:wrap">
+          <div class="pp-row" style="flex:1;min-width:180px">
+            <span class="pp-label wide">Show title bar</span>
+            <label class="pp-toggle"><input type="checkbox" id="pp-showTitle" checked><span class="pp-track"></span></label>
+            <span class="pp-unit" style="margin-left:6px">Document title at top</span>
+          </div>
+          <div class="pp-row" style="flex:1;min-width:180px">
+            <span class="pp-label wide">Show logo</span>
+            <label class="pp-toggle"><input type="checkbox" id="pp-showLogo" checked><span class="pp-track"></span></label>
+            <span class="pp-unit" style="margin-left:6px">MarkFlow branding</span>
+          </div>
+        </div>
+        <!-- Date -->
+        <div class="pp-row" style="margin-top:0.5rem;align-items:flex-start;flex-wrap:wrap;gap:0.4rem">
+          <span class="pp-label wide" style="padding-top:4px">Show date</span>
+          <label class="pp-toggle" style="margin-top:3px"><input type="checkbox" id="pp-showDate" onchange="ppDateTimeToggle()"><span class="pp-track"></span></label>
+          <div id="pp-date-fields" style="display:none;flex-wrap:wrap;gap:0.4rem;align-items:center;flex:1;min-width:0">
+            <select class="pp-select" id="pp-dateFmtPreset" style="flex:1;min-width:120px;max-width:180px;font-size:11px" onchange="ppDatePresetChange()">
+              <option value="{DD}/{MM}/{YYYY}">{DD}/{MM}/{YYYY}</option>
+              <option value="{DD}-{MM}-{YYYY}">{DD}-{MM}-{YYYY}</option>
+              <option value="{DD}/{MM}/{YY}">{DD}/{MM}/{YY}</option>
+              <option value="{DD}-{MM}-{YY}">{DD}-{MM}-{YY}</option>
+              <option value="{MM}/{DD}/{YYYY}">{MM}/{DD}/{YYYY}</option>
+              <option value="{MM}-{DD}-{YYYY}">{MM}-{DD}-{YYYY}</option>
+              <option value="{YYYY}-{MM}-{DD}">{YYYY}-{MM}-{DD}</option>
+              <option value="{YYYY}/{MM}/{DD}">{YYYY}/{MM}/{DD}</option>
+              <option value="{DD} {MONTH} {YYYY}">{DD} {MONTH} {YYYY}</option>
+              <option value="{DD} {MON} {YYYY}">{DD} {MON} {YYYY}</option>
+              <option value="{DAY}, {DD} {MONTH} {YYYY}">{DAY}, {DD} {MONTH} {YYYY}</option>
+              <option value="custom">✏ Custom…</option>
+            </select>
+            <input class="pp-input" type="text" id="pp-dateFmt" value="{DD}/{MM}/{YYYY}" style="flex:1;min-width:100px;max-width:160px;font-size:11px" oninput="ppDateFmtInput()" title="Tokens: {DD} {MM} {YY} {YYYY} {MON} {MONTH} {DAY}">
+            <span class="pp-unit" id="pp-datePreview" style="font-size:10px;opacity:0.7;white-space:nowrap"></span>
+          </div>
+        </div>
+        <!-- Time -->
+        <div class="pp-row" style="margin-top:0.5rem;align-items:flex-start;flex-wrap:wrap;gap:0.4rem">
+          <span class="pp-label wide" style="padding-top:4px">Show time</span>
+          <label class="pp-toggle" style="margin-top:3px"><input type="checkbox" id="pp-showTime" onchange="ppDateTimeToggle()"><span class="pp-track"></span></label>
+          <div id="pp-time-fields" style="display:none;flex-wrap:wrap;gap:0.4rem;align-items:center;flex:1;min-width:0">
+            <select class="pp-select" id="pp-timeFmtPreset" style="flex:1;min-width:120px;max-width:180px;font-size:11px" onchange="ppTimePresetChange()">
+              <option value="{HH}:{MM}">{HH}:{MM} (24h)</option>
+              <option value="{HH}:{MM}:{SS}">{HH}:{MM}:{SS} (24h)</option>
+              <option value="{hh}:{MM} {AMPM}">{hh}:{MM} {AMPM} (12h)</option>
+              <option value="{hh}:{MM}:{SS} {AMPM}">{hh}:{MM}:{SS} {AMPM} (12h)</option>
+              <option value="{HH}h{MM}m">{HH}h{MM}m</option>
+              <option value="custom">✏ Custom…</option>
+            </select>
+            <input class="pp-input" type="text" id="pp-timeFmt" value="{HH}:{MM}" style="flex:1;min-width:100px;max-width:160px;font-size:11px" oninput="ppTimeFmtInput()" title="Tokens: {HH} {MM} {SS} {hh} {AMPM}">
+            <span class="pp-unit" id="pp-timePreview" style="font-size:10px;opacity:0.7;white-space:nowrap"></span>
+          </div>
+        </div>
+        <!-- Author -->
+        <div class="pp-row" style="margin-top:0.5rem;align-items:center;flex-wrap:wrap;gap:0.4rem">
+          <span class="pp-label wide">Show author</span>
+          <label class="pp-toggle"><input type="checkbox" id="pp-showAuthor" onchange="ppAuthorToggle()"><span class="pp-track"></span></label>
+          <div id="pp-author-fields" style="display:none;flex-wrap:wrap;gap:0.4rem;align-items:center;flex:1;min-width:0">
+            <input class="pp-input" type="text" id="pp-authorName" placeholder="Author name…" style="flex:1;min-width:140px;max-width:260px;font-size:11px">
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /pp-body -->
+
+    <div class="pp-footer">
+      <span class="pp-footer-tip">Print dialog → Destination → "Save as PDF" to export</span>
+      <button class="pp-btn-cancel" onclick="closePrintSettings()">Cancel</button>
+      <button class="pp-btn-print" onclick="executePrint()">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="1" width="10" height="4" rx="0.5"/><rect x="1" y="5" width="14" height="8" rx="1"/><rect x="4" y="10" width="8" height="5" rx="0.5"/><circle cx="12" cy="8.5" r="0.8" fill="currentColor" stroke="none"/></svg>
+        Print / Export PDF
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════
+//  PRINT SETTINGS UI HELPERS
+// ══════════════════════════════════════════════════
+function openPrintSettings() {
+  if (!output.innerHTML.trim()) return;
+  document.getElementById('printOverlay').classList.add('open');
+}
+function closePrintSettings() {
+  document.getElementById('printOverlay').classList.remove('open');
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePrintSettings();
+});
+document.getElementById('printOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closePrintSettings();
+});
+
+function ppPageSizeChange() {
+  const val = document.getElementById('pp-pageSize').value;
+  document.getElementById('pp-customSize').classList.toggle('show', val === 'custom');
+}
+function ppTogglePageNum() {
+  const on = document.getElementById('pp-pageNum').checked;
+  document.getElementById('pp-pageNumOpts').style.opacity = on ? '1' : '0.3';
+  document.getElementById('pp-pageNumOpts').style.pointerEvents = on ? '' : 'none';
+}
+function ppSetPos(btn) {
+  document.querySelectorAll('.pp-pos-btn').forEach(b => b.classList.remove('sel'));
+  btn.classList.add('sel');
+}
+function ppToggleFmt(btn) { btn.classList.toggle('on'); }
+
+function ppAuthorToggle() {
+  var show = document.getElementById('pp-showAuthor').checked;
+  document.getElementById('pp-author-fields').style.display = show ? 'flex' : 'none';
+}
+
+function ppDateTimeToggle() {
+  var showDate = document.getElementById('pp-showDate').checked;
+  var showTime = document.getElementById('pp-showTime').checked;
+  var df = document.getElementById('pp-date-fields');
+  var tf = document.getElementById('pp-time-fields');
+  df.style.display = showDate ? 'flex' : 'none';
+  tf.style.display = showTime ? 'flex' : 'none';
+  if (showDate) ppUpdateDatePreview();
+  if (showTime) ppUpdateTimePreview();
+}
+
+function ppFormatDate(fmt) {
+  var now = new Date();
+  var days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var mons   = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var DD    = String(now.getDate()).padStart(2,'0');
+  var MM    = String(now.getMonth()+1).padStart(2,'0');
+  var YYYY  = String(now.getFullYear());
+  var YY    = YYYY.slice(2);
+  var MONTH = months[now.getMonth()];
+  var MON   = mons[now.getMonth()];
+  var DAY   = days[now.getDay()];
+  return fmt
+    .replace(/\{YYYY\}/g, YYYY).replace(/\{YY\}/g, YY)
+    .replace(/\{MM\}/g, MM).replace(/\{DD\}/g, DD)
+    .replace(/\{MONTH\}/g, MONTH).replace(/\{MON\}/g, MON)
+    .replace(/\{DAY\}/g, DAY);
+}
+
+function ppFormatTime(fmt) {
+  var now = new Date();
+  var H  = now.getHours();
+  var HH = String(H).padStart(2,'0');
+  var hh = String(H % 12 || 12).padStart(2,'0');
+  var MM = String(now.getMinutes()).padStart(2,'0');
+  var SS = String(now.getSeconds()).padStart(2,'0');
+  var AMPM = H < 12 ? 'AM' : 'PM';
+  return fmt
+    .replace(/\{HH\}/g, HH).replace(/\{hh\}/g, hh)
+    .replace(/\{MM\}/g, MM).replace(/\{SS\}/g, SS)
+    .replace(/\{AMPM\}/g, AMPM);
+}
+
+function ppUpdateDatePreview() {
+  var fmt = document.getElementById('pp-dateFmt').value;
+  document.getElementById('pp-datePreview').textContent = '→ ' + ppFormatDate(fmt);
+}
+function ppUpdateTimePreview() {
+  var fmt = document.getElementById('pp-timeFmt').value;
+  document.getElementById('pp-timePreview').textContent = '→ ' + ppFormatTime(fmt);
+}
+function ppDatePresetChange() {
+  var v = document.getElementById('pp-dateFmtPreset').value;
+  if (v !== 'custom') { document.getElementById('pp-dateFmt').value = v; ppUpdateDatePreview(); }
+}
+function ppTimePresetChange() {
+  var v = document.getElementById('pp-timeFmtPreset').value;
+  if (v !== 'custom') { document.getElementById('pp-timeFmt').value = v; ppUpdateTimePreview(); }
+}
+function ppDateFmtInput() {
+  document.getElementById('pp-dateFmtPreset').value = 'custom';
+  ppUpdateDatePreview();
+}
+function ppTimeFmtInput() {
+  document.getElementById('pp-timeFmtPreset').value = 'custom';
+  ppUpdateTimePreview();
+}
+
+// ══════════════════════════════════════════════════
+//  PRINT SETTINGS → CSS BUILDER
+// ══════════════════════════════════════════════════
+function getPrintSettings() {
+  const gv = id => document.getElementById(id).value;
+  const gc = id => document.getElementById(id).checked;
+  return {
+    selectedSize: gv('pp-pageSize'),
+    custW:        parseFloat(gv('pp-custW')) || 210,
+    custH:        parseFloat(gv('pp-custH')) || 297,
+    custUnit:     gv('pp-custUnit'),
+    orientation:  gv('pp-orientation'),
+    marginUnit:   gv('pp-marginUnit'),
+    mTop:         isNaN(parseFloat(gv('pp-mTop')))    ? 18 : parseFloat(gv('pp-mTop')),
+    mBottom:      isNaN(parseFloat(gv('pp-mBottom'))) ? 18 : parseFloat(gv('pp-mBottom')),
+    mLeft:        isNaN(parseFloat(gv('pp-mLeft')))   ? 20 : parseFloat(gv('pp-mLeft')),
+    mRight:       isNaN(parseFloat(gv('pp-mRight')))  ? 20 : parseFloat(gv('pp-mRight')),
+    printBg:      gc('pp-printBg'),
+    printCode:    gc('pp-printCode'),
+    printImages:  gc('pp-printImages'),
+    linkStyle:    gv('pp-linkStyle'),
+    showTitle:    gc('pp-showTitle'),
+    showLogo:     gc('pp-showLogo'),
+    showDate:     gc('pp-showDate'),
+    dateFmt:      gv('pp-dateFmt') || '{DD}/{MM}/{YYYY}',
+    showTime:     gc('pp-showTime'),
+    timeFmt:      gv('pp-timeFmt') || '{HH}:{MM}',
+    showAuthor:   gc('pp-showAuthor'),
+    authorName:   gv('pp-authorName').trim(),
+    pnOn:         gc('pp-pageNum'),
+    pnFmt:        gv('pp-pageNumFmt').trim() || '{PAGE} / {TOTAL}',
+    pnPos:        (document.querySelector('.pp-pos-btn.sel') || {dataset:{pos:'bottom-center'}}).dataset.pos,
+    pnColor:      gv('pp-pnColor'),
+    pnSize:       parseInt(gv('pp-pnSize')) || 8,
+    pnBold:       !!document.querySelector('[data-fmt="bold"].on'),
+    pnItal:       !!document.querySelector('[data-fmt="italic"].on'),
+    pnUnder:      !!document.querySelector('[data-fmt="underline"].on'),
+  };
+}
+
+// ══════════════════════════════════════════════════
+//  BUILD PAGE-NUMBER CSS  (JS-driven via counter)
+// ══════════════════════════════════════════════════
+function executePrint() {
+  closePrintSettings();
+  var s = getPrintSettings();
+  var titleEl2 = document.getElementById('titleInput') || titleEl;
+  var docTitle = (titleEl2 ? titleEl2.value : '').trim() || 'MarkFlow Document';
+  var escTitle = docTitle.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+  // ── Page dimensions ──
+  var sizeMap = {
+    'A0':[841,1189],'A1':[594,841],'A2':[420,594],
+    'A3':[297,420],'A4':[210,297],'A5':[148,210],
+    'A6':[105,148],'A7':[74,105],
+    'B3':[353,500],'B4':[250,353],'B5':[176,250],'B6':[125,176],
+    'letter':[215.9,279.4],'legal':[215.9,355.6],
+    'tabloid':[279.4,431.8],'ledger':[431.8,279.4],
+    'executive':[184.2,266.7],'statement':[139.7,215.9],
+    'folio':[215.9,330.2],'JIS-B4':[257,364],'JIS-B5':[182,257]
+  };
+  var pgW, pgH, pgUnit;
+  if (s.selectedSize === 'custom') {
+    pgW = parseFloat(s.custW) || 210;
+    pgH = parseFloat(s.custH) || 297;
+    pgUnit = s.custUnit || 'mm';
+  } else {
+    var sz = sizeMap[s.selectedSize] || [210, 297];
+    pgW = sz[0]; pgH = sz[1]; pgUnit = 'mm';
+  }
+  // Swap dimensions for landscape (browser ignores 'landscape' keyword with explicit mm sizes)
+  if (s.orientation === 'landscape' && pgH > pgW) { var _t = pgW; pgW = pgH; pgH = _t; }
+  if (s.orientation === 'portrait'  && pgW > pgH) { var _t = pgW; pgW = pgH; pgH = _t; }
+  var pgSize = pgW + pgUnit + ' ' + pgH + pgUnit;
+
+  var mu = s.marginUnit;
+  var margins = s.mTop+mu+' '+s.mRight+mu+' '+s.mBottom+mu+' '+s.mLeft+mu;
+
+  // ── Per-setting CSS ──
+  var linkCSS =
+    s.linkStyle==='underline' ? '.c a{color:#000!important;text-decoration:underline!important}' :
+    s.linkStyle==='plain'     ? '.c a{color:inherit!important;text-decoration:none!important}' :
+                                '.c a{color:#c0392b!important;text-decoration:underline}';
+
+  var codeCSS = s.printCode
+    ? '.hl-k{color:#cc99cd!important}.hl-s{color:#7ec699!important}.hl-cm{color:#999!important;font-style:italic}.hl-n{color:#f08d49!important}.hl-f,.hl-t{color:#6fb3d2!important}.hl-b{color:#f08d49!important}.hl-a{color:#7ec699!important}.hl-v,.hl-p{color:#e8dfc8!important}.hl-o{color:#67cdcc!important}.hl-m{color:#cc99cd!important}'
+    : '.c pre{background:#eee!important;border:1px solid #ccc!important}.c pre code,.c pre code.hljs{background:transparent!important;color:#1a1208!important}.hljs-keyword,.hljs-string,.hljs-comment,.hljs-number,.hljs-function,.hljs-title,.hljs-built_in,.hljs-attr,.hljs-variable,.hljs-operator,.hljs-params,.hljs-meta{color:inherit!important;font-style:normal!important}';
+
+  // Map hljs class names to short aliases for printCode=true
+  var bodyHTML = output.innerHTML;
+  if (s.printCode) {
+    bodyHTML = bodyHTML
+      .replace(/\bhljs-keyword\b/g,'hl-k').replace(/\bhljs-string\b/g,'hl-s')
+      .replace(/\bhljs-comment\b/g,'hl-cm').replace(/\bhljs-number\b/g,'hl-n')
+      .replace(/\bhljs-function\b/g,'hl-f').replace(/\bhljs-title\b/g,'hl-t')
+      .replace(/\bhljs-built_in\b/g,'hl-b').replace(/\bhljs-attr\b/g,'hl-a')
+      .replace(/\bhljs-variable\b/g,'hl-v').replace(/\bhljs-params\b/g,'hl-p')
+      .replace(/\bhljs-operator\b/g,'hl-o').replace(/\bhljs-meta\b/g,'hl-m');
+  }
+
+  var bgCSS = s.printBg
+    ? '*,*::before,*::after{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'
+    : '*,*::before,*::after{-webkit-print-color-adjust:economy!important;print-color-adjust:economy!important}'
+    + 'html,body,.c{background:#fff!important;background-color:#fff!important}'
+    + '*{background:transparent!important;background-color:transparent!important;background-image:none!important}'
+    + 'html,body{color:#000!important}'
+    + '.c h1,.c h2,.c h3,.c h4,.c h5,.c h6,.c p,.c li,.c td,.c th,.c blockquote,.c code{color:#000!important}'
+    + '.c th{background:#000!important;color:#fff!important}'
+    + '.c pre{background:#f4f4f4!important}'
+    + '.c pre code,.c pre code.hljs{background:transparent!important;color:#222!important}'
+    + '.c blockquote{border-left:4px solid #b8860b!important}'
+    + '.c mark{background:transparent!important;text-decoration:underline;outline:1px solid #999}'
+    + '.c .katex-display{border-left:3px solid #b8860b!important}'
+    + '.c tr:nth-child(even) td{background:transparent!important}'
+    + '.ptbar{border-bottom:3px solid #c0392b!important}';
+
+  var imgCSS = s.printImages ? '' : '.c img{display:none!important}';
+
+  var titleBarHTML = '';
+  if (s.showTitle || s.showDate || s.showTime) {
+    // Build date/time string
+    var now = new Date();
+    var days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    var mons   = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var _DD    = String(now.getDate()).padStart(2,'0');
+    var _MM    = String(now.getMonth()+1).padStart(2,'0');
+    var _YYYY  = String(now.getFullYear());
+    var _YY    = _YYYY.slice(2);
+    var _MONTH = months[now.getMonth()];
+    var _MON   = mons[now.getMonth()];
+    var _DAY   = days[now.getDay()];
+    var _H     = now.getHours();
+    var _HH    = String(_H).padStart(2,'0');
+    var _hh    = String(_H % 12 || 12).padStart(2,'0');
+    var _Mm    = String(now.getMinutes()).padStart(2,'0');
+    var _SS    = String(now.getSeconds()).padStart(2,'0');
+    var _AMPM  = _H < 12 ? 'AM' : 'PM';
+
+    var dateStr = s.showDate ? s.dateFmt
+      .replace(/\{YYYY\}/g,_YYYY).replace(/\{YY\}/g,_YY)
+      .replace(/\{MM\}/g,_MM).replace(/\{DD\}/g,_DD)
+      .replace(/\{MONTH\}/g,_MONTH).replace(/\{MON\}/g,_MON)
+      .replace(/\{DAY\}/g,_DAY) : '';
+
+    var timeStr = s.showTime ? s.timeFmt
+      .replace(/\{HH\}/g,_HH).replace(/\{hh\}/g,_hh)
+      .replace(/\{MM\}/g,_Mm).replace(/\{SS\}/g,_SS)
+      .replace(/\{AMPM\}/g,_AMPM) : '';
+
+    var dtStr = [dateStr, timeStr].filter(Boolean).join('&nbsp;&nbsp;');
+    var authorStr = (s.showAuthor && s.authorName) ? s.authorName.replace(/&/g,'&amp;').replace(/</g,'&lt;') : '';
+
+    titleBarHTML = '<div class="ptbar">'
+      + (s.showTitle ? '<div class="ptitle">'+escTitle+'</div>' : '<div></div>')
+      + '<div class="ptmeta">'
+      + (authorStr ? '<span class="pauthor">'+authorStr+'</span>' : '')
+      + (s.showLogo ? '<span class="plogo">Mark&#9679;Flow</span>' : '')
+      + (dtStr ? '<span class="pdatetime">'+dtStr+'</span>' : '')
+      + '</div>'
+      + '</div>';
+  }
+
+  // ── Page numbers: single @page rule with native counter(page) ──
+  // counter(page) / counter(pages) are rendered by the browser's own print
+  // engine directly into @page margin boxes. This works in all browsers.
+  var pnPageBox = '';
+  if (s.pnOn) {
+    var fw  = s.pnBold  ? 'bold'      : 'normal';
+    var fi  = s.pnItal  ? 'italic'    : 'normal';
+    var td  = s.pnUnder ? 'underline' : 'none';
+    var psz = (s.pnSize | 0) + 'pt';
+    var pc  = s.pnColor;
+    var boxMap = {
+      'top-left':    '@top-left',    'top-center':   '@top-center',   'top-right':   '@top-right',
+      'bottom-left': '@bottom-left', 'bottom-center':'@bottom-center','bottom-right':'@bottom-right'
+    };
+    var box = boxMap[s.pnPos] || '@bottom-center';
+    // Build content: replace {PAGE} → counter(page), {TOTAL} → counter(pages)
+    var contentVal = s.pnFmt
+      .split(/(\{PAGE\}|\{TOTAL\})/)
+      .map(function(p) {
+        if (p === '{PAGE}')  return 'counter(page)';
+        if (p === '{TOTAL}') return 'counter(pages)';
+        return p ? '"' + p.replace(/"/g, '\\"') + '"' : null;
+      })
+      .filter(Boolean).join(' ');
+    pnPageBox = box + '{content:' + contentVal
+      + ';font-family:monospace;font-size:' + psz
+      + ';color:' + pc + ';font-weight:' + fw
+      + ';font-style:' + fi + ';text-decoration:' + td + '}';
+  }
+
+  // ── Assemble full print CSS (single @page rule — splitting it breaks everything) ──
+  var css =
+    '@page{size:'+pgSize+';margin:'+margins+';'+pnPageBox+'}\n'
+  + bgCSS+'\n'
+  + 'html,body{margin:0;padding:0;background:#f5f0e8;color:#1a1208;font-family:Georgia,serif;font-size:11pt;line-height:1.8}\n'
+  + '.c{max-width:none!important;margin:0!important}\n'
+  + '.c h1{font-size:20pt;font-weight:900;color:#1a1208!important;border-bottom:3px solid #c0392b!important;padding-bottom:4pt;margin-bottom:8pt;page-break-after:avoid}\n'
+  + '.c h2{font-size:15pt;font-weight:700;color:#1a1208!important;border-left:3px solid #b8860b!important;padding-left:8pt;margin-top:18pt;margin-bottom:6pt;page-break-after:avoid}\n'
+  + '.c h3{font-family:monospace;font-size:8.5pt;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#2c7a4b!important;margin-top:14pt;margin-bottom:4pt;page-break-after:avoid}\n'
+  + '.c h4,.c h5,.c h6{font-weight:600;color:#1a1208!important;page-break-after:avoid}\n'
+  + '.c p{color:#2a2015!important;margin-bottom:10pt}\n'
+  + '.c strong{color:#1a1208!important;font-weight:700}\n'
+  + '.c em{font-style:italic}\n'
+  + '.c del{text-decoration:line-through;color:#7a6f5e!important}\n'
+  + '.c mark{background:#f9e04b;padding:0 2px;border-radius:2px}\n'
+  + linkCSS+'\n'
+  + '.c ul,.c ol{padding-left:18pt;margin-bottom:10pt}\n'
+  + '.c li{line-height:1.7;margin-bottom:2pt}\n'
+  + '.c blockquote{margin:12pt 0;padding:8pt 14pt;background:#ede7d3;border-left:4px solid #b8860b!important;border-radius:0 2px 2px 0;font-style:italic;color:#7a6f5e!important;page-break-inside:avoid}\n'
+  + '.c blockquote p{margin-bottom:0;color:inherit!important}\n'
+  + '.c code{font-family:monospace;font-size:8pt;background:rgba(26,18,8,.07)!important;color:#c0392b!important;border:1px solid #c8bda8!important;padding:1pt 3pt;border-radius:2px}\n'
+  + '.c pre{background:#1e1810!important;border-radius:3px;margin:12pt 0;border:1px solid rgba(200,189,168,.3)!important;page-break-inside:avoid;overflow:hidden}\n'
+  + '.c pre code,.c pre code.hljs{display:block;background:transparent!important;border:none!important;padding:10pt 12pt!important;color:#c8d3c0!important;font-family:monospace;font-size:7.5pt;line-height:1.7;white-space:pre-wrap;word-break:break-all}\n'
+  + codeCSS+'\n'
+  + '.copy-code{display:none!important}\n'
+  + '.c table{width:100%;border-collapse:collapse;margin:12pt 0;font-size:9pt;page-break-inside:avoid}\n'
+  + '.c th{font-family:monospace;font-size:7pt;letter-spacing:.1em;text-transform:uppercase;background:#1a1208!important;color:#f5f0e8!important;padding:5pt 8pt;text-align:left}\n'
+  + '.c td{padding:5pt 8pt;border-bottom:1px solid #c8bda8!important;color:#2a2015!important}\n'
+  + '.c tr:nth-child(even) td{background:#ede7d3!important}\n'
+  + '.c hr{border:none;border-top:1.5px solid #c8bda8!important;margin:18pt 0}\n'
+  + '.c img{max-width:100%;border-radius:2px;border:1px solid #c8bda8!important;margin:6pt 0}\n'
+  + imgCSS+'\n'
+  + '.c .katex-display{overflow:visible;padding:8pt 12pt;margin:12pt 0;background:#ede7d3!important;border-left:3px solid #b8860b!important;border-radius:0 3px 3px 0;page-break-inside:avoid}\n'
+  + '.katex,.katex *{font-family:unset;font-size:unset;line-height:unset;color:unset;background:unset!important;border:none!important;padding:unset;margin:unset}\n'
+  + '.c .katex-display .katex{font-size:1.1em}\n'
+  + '.c .katex{font-size:1em}\n'
+  + '.c kbd{background:#ede7d3!important;border:1px solid #c8bda8!important;border-bottom:2px solid #b8860b!important;border-radius:3px;font-family:monospace;font-size:8pt;padding:1pt 4pt;color:#1a1208!important}\n'
+  + '.c sup,.c sub{font-size:75%}\n'
+  + '.c details{border:1px solid #c8bda8!important;border-radius:3px;padding:6pt 10pt;margin:8pt 0}\n'
+  + '.c summary{font-weight:600;color:#1a1208!important}\n'
+  + '.ptbar{display:flex;align-items:baseline;justify-content:space-between;border-bottom:3px solid #c0392b;padding-bottom:6pt;margin-bottom:18pt;page-break-inside:avoid}\n'
+  + '.ptitle{font-size:15pt;font-weight:900;color:#1a1208;margin:0}\n'
+  + '.ptmeta{display:flex;align-items:baseline;gap:10pt}\n'
+  + '.plogo{font-family:monospace;font-size:7pt;letter-spacing:.12em;color:#7a6f5e;text-transform:uppercase}\n'
+  + '.pauthor{font-family:monospace;font-size:7.5pt;color:#7a6f5e}\n'
+  + '.pdatetime{font-family:monospace;font-size:7.5pt;color:#7a6f5e}\n';
+
+  // ── Open popup window for printing ──
+  // @page margin boxes (page numbers) do NOT work inside iframes in Chrome/Edge.
+  // A popup window is required for @page rules to be honoured by the browser print engine.
+  var popup = window.open('', '_blank',
+    'width=800,height=600,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no,status=no');
+  if (!popup) {
+    alert('Pop-up blocked. Please allow pop-ups for this page and try again.');
+    return;
+  }
+  popup.document.open();
+  popup.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'
+    + escTitle + '</title>'
+    + '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">'
+    + '<style>' + css + '</style></head><body>'
+    + titleBarHTML
+    + '<div class="c">' + bodyHTML + '</div>'
+    + '<script>window.onload=function(){document.fonts.ready.then(function(){window.print();});};window.onafterprint=function(){window.close();};<\/script>'
+    + '</body></html>');
+  popup.document.close();
+}
+
+
+</script>
+
 </body>
 </html>
