@@ -2244,6 +2244,18 @@ async function loadNote(id) {
   render();
   renderNotesList();
   closeNotes();
+  // Re-apply panel width after note is loaded — large note content can trigger
+  // a reflow that loses the editor panel's inline width on desktop.
+  if (window.innerWidth > 720) {
+    requestAnimationFrame(() => {
+      const ep = document.querySelector('.panel-editor');
+      const ws = document.querySelector('.workspace');
+      if (ep && ws && (!ep.style.width || ep.style.width === '' || ep.style.width === '100%')) {
+        ep.style.width = (ws.offsetWidth / 2) + 'px';
+        ep.style.flex  = 'none';
+      }
+    });
+  }
   editor.focus();
 }
 
@@ -2373,6 +2385,19 @@ openDB().then(async () => {
     render();
     setAutosaveDot('saved');
     setTimeout(() => setAutosaveDot(''), 2000);
+    // Re-apply panel width after note content is loaded — the async DB read
+    // can resolve after the initial requestAnimationFrame that sets initWidth(),
+    // causing a reflow that loses the 50/50 split on desktop.
+    if (window.innerWidth > 720) {
+      requestAnimationFrame(() => {
+        const ep = document.querySelector('.panel-editor');
+        const ws = document.querySelector('.workspace');
+        if (ep && ws && (!ep.style.width || ep.style.width === '')) {
+          ep.style.width = (ws.offsetWidth / 2) + 'px';
+          ep.style.flex  = 'none';
+        }
+      });
+    }
   }
 }).catch(e => console.warn('IndexedDB not available:', e));
 
@@ -3491,11 +3516,13 @@ function builtinFormatMarkdown(text) {
 
   // Set initial width to 50%
   function initWidth() {
+    if (window.innerWidth <= 720) return; // mobile handles its own layout
     editorPanel.style.width = (ws.offsetWidth / 2) + 'px';
     editorPanel.style.flex  = 'none';
   }
-  // Run after layout is ready
+  // Run after layout is ready, and again after a short delay to catch async note loads
   requestAnimationFrame(initWidth);
+  setTimeout(initWidth, 400);
 })();
 
 // ── Mobile tab switching ─────────────────────────────────────
