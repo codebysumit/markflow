@@ -1613,6 +1613,14 @@
 
     /* Mobile: reading mode hides mobile tabs too */
     body.reading-mode .mobile-tabs { display: none !important; }
+
+    /* Reading mode: title bar is non-editable */
+    body.reading-mode #titleInput {
+      pointer-events: none;
+      user-select: none;
+      opacity: 0.45;
+      cursor: default;
+    }
   </style>
 </head>
 <body>
@@ -3220,8 +3228,9 @@ function toggleWordWrap() {
 let readingModeOn = false;
 function toggleReadingMode() {
   readingModeOn = !readingModeOn;
-  const btn = document.getElementById('btnReadingMode');
-  const body = document.body;
+  const btn     = document.getElementById('btnReadingMode');
+  const body    = document.body;
+  const titleInput = document.getElementById('titleInput');
 
   if (readingModeOn) {
     // Entering reading mode: ensure preview is visible first
@@ -3229,8 +3238,21 @@ function toggleReadingMode() {
     const resizer = document.getElementById('resizer');
     panel.style.display   = '';
     resizer.style.display = '';
+
+    // On mobile: switch to preview tab so the content is visible immediately
+    if (isMobile()) {
+      const editorPanel = document.querySelector('.panel-editor');
+      editorPanel.classList.add('mobile-hidden');
+      panel.classList.remove('mobile-hidden');
+      mobileActiveTab = 'preview';
+    }
+
     body.classList.add('reading-mode');
     btn.classList.add('reading-active');
+    // Disable title input — read-only in reading mode
+    titleInput.disabled = true;
+    titleInput.style.opacity = '0.45';
+    titleInput.style.cursor  = 'default';
     // Update button label
     btn.querySelector('.btn-label').textContent = 'Edit';
     btn.title = 'Exit Reading Mode';
@@ -3242,19 +3264,29 @@ function toggleReadingMode() {
     // Exiting reading mode
     body.classList.remove('reading-mode');
     btn.classList.remove('reading-active');
+    // Re-enable title input
+    titleInput.disabled = false;
+    titleInput.style.opacity = '';
+    titleInput.style.cursor  = '';
     btn.querySelector('.btn-label').textContent = 'Read';
     btn.title = 'Reading Mode — preview only';
     // Restore icon
     btn.querySelector('svg').innerHTML = '<path d="M2 4h12M2 7h8M2 10h10M2 13h6" stroke-linecap="round"/><circle cx="12.5" cy="11.5" r="2.5" stroke-width="1.4"/><path d="M14.5 13.5l1.5 1.5" stroke-linecap="round"/>';
-    // Restore previous preview state — if previewVisible is false, re-hide it
-    if (!previewVisible) {
-      const panel   = document.getElementById('panelPreview');
-      const resizer = document.getElementById('resizer');
-      const ep      = document.querySelector('.panel-editor');
-      panel.style.display   = 'none';
-      resizer.style.display = 'none';
-      ep.style.width = '100%';
-      ep.style.flex  = 'none';
+
+    // On mobile: restore editor tab
+    if (isMobile()) {
+      switchMobileTab('editor');
+    } else {
+      // Restore previous preview state — if previewVisible is false, re-hide it
+      if (!previewVisible) {
+        const panel   = document.getElementById('panelPreview');
+        const resizer = document.getElementById('resizer');
+        const ep      = document.querySelector('.panel-editor');
+        panel.style.display   = 'none';
+        resizer.style.display = 'none';
+        ep.style.width = '100%';
+        ep.style.flex  = 'none';
+      }
     }
     // Refocus editor
     setTimeout(() => editor.focus(), 80);
