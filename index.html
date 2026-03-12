@@ -3270,6 +3270,8 @@ function toggleReadingMode() {
     btn.querySelector('svg').innerHTML = '<path d="M11.5 2.5l2 2-8 8H3.5V11l8-8.5z" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.5 4.5l2 2" stroke-linecap="round"/>';
     // Scroll preview to top
     document.getElementById('preview').scrollTop = 0;
+    // On mobile: mobile-tabs are now hidden — recalculate workspace height
+    if (isMobile()) requestAnimationFrame(() => applyMobileLayout());
   } else {
     // Exiting reading mode
     body.classList.remove('reading-mode');
@@ -3286,6 +3288,9 @@ function toggleReadingMode() {
     // On mobile: restore editor tab
     if (isMobile()) {
       switchMobileTab('editor');
+      // mobile-tabs are visible again — recalculate workspace height so the
+      // tab bar is never buried under the workspace
+      requestAnimationFrame(() => applyMobileLayout());
     } else {
       // Restore previous preview state — if previewVisible is false, re-hide it
       if (!previewVisible) {
