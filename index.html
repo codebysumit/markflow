@@ -621,8 +621,9 @@
       /* Workspace: fill remaining height, no scrolling at this level */
       .workspace {
         flex-direction: row; /* keep row so panels are side by side in DOM */
-        height: 0;           /* will be set by JS */
-        flex: 1;
+        flex: 1 1 0%;
+        min-height: 0;       /* critical: prevents flex blowout */
+        height: 0;           /* will also be set by JS as fallback */
         overflow: hidden;
         position: relative;
       }
@@ -2383,6 +2384,12 @@ async function loadNote(id) {
     });
   }
   editor.focus();
+  // On mobile the header may change height when the note title fills in;
+  // re-measure so the workspace height stays correct and tabs don't get covered.
+  if (isMobile()) {
+    // Two frames: first lets the title render, second measures the settled layout.
+    requestAnimationFrame(() => requestAnimationFrame(() => applyMobileLayout()));
+  }
 }
 
 // ── Delete ─────────────────────────────────────────────
@@ -3746,16 +3753,31 @@ function isMobile() { return window.innerWidth <= 720; }
 
 function applyMobileLayout() {
   if (!isMobile()) return;
-  const ws   = document.querySelector('.workspace');
-  const hdr  = document.querySelector('header');
-  const tabs = document.getElementById('mobileTabs');
-  const sb   = document.querySelector('.statusbar');
-  // Calculate available height
-  const used = hdr.offsetHeight + tabs.offsetHeight + sb.offsetHeight;
-  const avail = window.innerHeight - used;
-  ws.style.height = avail + 'px';
-  ws.style.flex   = 'none';
+  // Use rAF so we measure after any reflow triggered by content changes
+  requestAnimationFrame(() => {
+    const ws   = document.querySelector('.workspace');
+    const hdr  = document.querySelector('header');
+    const tabs = document.getElementById('mobileTabs');
+    const sb   = document.querySelector('.statusbar');
+    if (!ws || !hdr || !tabs || !sb) return;
+    // Calculate available height from actual rendered sizes
+    const used = hdr.getBoundingClientRect().height
+               + tabs.getBoundingClientRect().height
+               + sb.getBoundingClientRect().height;
+    const avail = Math.max(0, window.innerHeight - used);
+    ws.style.height = avail + 'px';
+    ws.style.flex   = 'none';
+  });
 }
+
+// Watch the header for height changes (e.g. title input wrapping when a note loads)
+// and re-apply the mobile layout so the workspace never overlaps the tab bar.
+(function initMobileHeaderObserver() {
+  const hdr = document.querySelector('header');
+  if (!hdr || typeof ResizeObserver === 'undefined') return;
+  const ro = new ResizeObserver(() => { applyMobileLayout(); });
+  ro.observe(hdr);
+})();
 
 function switchMobileTab(tab) {
   mobileActiveTab = tab;
