@@ -2496,6 +2496,9 @@ function openNotes() {
 }
 function closeNotes() {
   document.getElementById('notesOverlay').classList.remove('open');
+  // Re-measure on mobile: sign-in/out inside the sidebar may have changed
+  // the drive-bar height, and returning to the main view needs a fresh layout.
+  if (isMobile()) requestAnimationFrame(() => applyMobileLayout());
 }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -3770,13 +3773,19 @@ function applyMobileLayout() {
   });
 }
 
-// Watch the header for height changes (e.g. title input wrapping when a note loads)
-// and re-apply the mobile layout so the workspace never overlaps the tab bar.
+// Watch all three height-contributing elements for changes (header can wrap when
+// a note title loads; mobileTabs/statusbar are stable but observed for safety).
+// This re-runs applyMobileLayout() automatically whenever any of them resize,
+// covering sign-in UI changes, note-title reflows, orientation flips, etc.
 (function initMobileHeaderObserver() {
-  const hdr = document.querySelector('header');
-  if (!hdr || typeof ResizeObserver === 'undefined') return;
+  if (typeof ResizeObserver === 'undefined') return;
   const ro = new ResizeObserver(() => { applyMobileLayout(); });
-  ro.observe(hdr);
+  const targets = [
+    document.querySelector('header'),
+    document.getElementById('mobileTabs'),
+    document.querySelector('.statusbar')
+  ];
+  targets.forEach(el => { if (el) ro.observe(el); });
 })();
 
 function switchMobileTab(tab) {
