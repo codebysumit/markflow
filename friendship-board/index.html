@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Friendship Board</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+
+<body>
+
+  <h1 class="board-title">My Friendship Board</h1>
+  <p class="board-subtitle">Sort friends into buckets, drag to reorder or move between buckets</p>
+
+  <div class="new-bucket-row">
+    <input type="text" id="bucket-input" placeholder="Bucket name, e.g. Casual Friends" maxlength="30">
+    <input type="text" id="bucket-desc-input" placeholder="Description (optional)" maxlength="120">
+    <button id="add-bucket-btn">Add Bucket</button>
+  </div>
+
+  <div class="toolbar">
+    <button id="export-btn">⬇ Export as JSON</button>
+    <button id="import-btn">⬆ Import from JSON</button>
+    <input type="file" id="import-file" accept="application/json" style="display:none">
+  </div>
+  <p class="toolbar-note" id="toolbar-note">Export saves your board as a .json file on your computer. Import loads a
+    board back from that file.</p>
+
+  <div class="board-wrap" id="board-wrap"></div>
+
+  <script src="src/script.js"></script>
+</body>
+
+</html>
